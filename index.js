@@ -113,7 +113,7 @@ const HTML = `<link rel="stylesheet" href="${U}ui/studio.css">
             <div class="nbs-row nbs-mkopts" style="margin-top:10px">
               <span>Durée</span><div class="nbs-parch"><select id="mkDur"><option value="30">30 s</option><option value="60" selected>1 min</option><option value="120">2 min</option><option value="180">3 min</option></select></div>
               <span>Tempo</span><div class="nbs-parch"><select id="mkTempo"><option value="lent">lent</option><option value="moyen" selected>moyen</option><option value="rapide">rapide</option></select></div>
-              <span>Ambiance</span><div class="nbs-parch"><select id="mkMood"><option value="joyeuse">lumineuse</option><option value="sombre">sombre</option></select></div>
+              <span>Ambiance</span><div class="nbs-parch"><select id="mkMood"><option value="joyeuse">lumineuse</option><option value="sombre">sombre</option><option value="paisible">paisible</option><option value="épique">épique</option><option value="mystérieuse">mystérieuse</option><option value="mélancolique">mélancolique</option><option value="tendue">tendue</option><option value="festive">festive</option><option value="héroïque">héroïque</option><option value="rêveuse">rêveuse</option><option value="étrange">étrange</option><option value="romantique">romantique</option></select></div>
             </div>
           </div>
           <div class="nbs-sep"></div>
@@ -487,6 +487,7 @@ export default async function (ctx) {
         ? `<div class="nbs-row nbs-mkver"><button class="nbs-btn dark sq" data-d="-1">${ic('prev')}</button><span>version ${(it.version || 0) + 1}/${it.versions}</span><button class="nbs-btn dark sq" data-d="1">${ic('next')}</button></div>` : '');
       box.querySelectorAll('[data-d]').forEach(b => b.onclick = async () => showItem(await post('/item-choose', { kind: 'objet', slug: it.slug, delta: +b.dataset.d })));
       chips.push(`<span class="nbs-rare r${RAR.indexOf(it.rarete)}">${esc(it.rarete)}</span>`, `<span class="nbs-chip">${esc(it.categorie)}</span>`);
+      if (it.combat) chips.push(`<span class="nbs-chip" title="Utilisable dans l'Arène, une fois par combat">⚔ ${esc(it.combat.texte)}</span>`);
     } else if (it.kind === 'attaque') {
       box.innerHTML = '<canvas class="nbs-sig-cv nbs-mk-cv" width="320" height="180"></canvas>';
       chips.push(atkRar(it.rarete), `<span class="nbs-chip">${esc(it.element)}</span>`, `<span class="nbs-chip">${esc(GENRE[it.genre] || it.genre)}</span>`);
@@ -503,7 +504,7 @@ export default async function (ctx) {
       a.onplay = a.onpause = () => b.innerHTML = ic(a.paused ? 'play' : 'pause');
       a.ontimeupdate = () => { bar.firstChild.style.width = (100 * a.currentTime / (a.duration || 1)) + '%'; box.querySelector('.nbs-mkplay span').textContent = mmss(a.currentTime) + ' / ' + mmss(a.duration || 0); };
       bar.onclick = e => { if (a.duration) a.currentTime = a.duration * e.offsetX / bar.clientWidth; };
-      chips.push(`<span class="nbs-chip">${Math.round(it.duree)} s</span>`, `<span class="nbs-chip">${esc(it.tempo)}</span>`, `<span class="nbs-chip">${esc(it.ambiance === 'sombre' ? 'sombre' : 'lumineuse')}</span>`);
+      chips.push(`<span class="nbs-chip">${Math.round(it.duree)} s</span>`, `<span class="nbs-chip">${esc(it.tempo)}</span>`, `<span class="nbs-chip">${esc(it.ambiance === 'joyeuse' || !it.ambiance ? 'lumineuse' : it.ambiance)}</span>`);
     }
     info.innerHTML = `<div class="nbs-row nbs-themes">${chips.join('')}</div><div class="nbs-hint">${esc(it.description || '')}</div>`;
   }
@@ -562,24 +563,30 @@ export default async function (ctx) {
   const MUS_THEMES = [
     ['Village', 'chiptune, 8-bit, cozy village theme, wooden flute melody, light percussion, warm and peaceful', 'moyen', 'joyeuse'],
     ['Combat', 'chiptune battle theme, driving bass, fast arpeggios, snare rolls, energetic and tense', 'rapide', 'sombre'],
-    ['Boss', 'epic boss battle, heavy 16-bit synth, pounding drums, organ, dramatic and menacing', 'rapide', 'sombre'],
-    ['Donjon', 'dungeon theme, slow echoing synth pads, dripping water percussion, mysterious and cold', 'lent', 'sombre'],
-    ['Grotte', 'cave ambience, low drones, sparse bell notes, deep echo, quiet and eerie', 'lent', 'sombre'],
-    ['Forêt', 'enchanted forest, harp arpeggios, soft flute, birdsong chimes, gentle and magical', 'moyen', 'joyeuse'],
-    ['Océan', 'ocean theme, flowing marimba, soft waves, steel drum, breezy and calm', 'moyen', 'joyeuse'],
+    ['Boss', 'epic boss battle, heavy 16-bit synth, pounding drums, organ, dramatic and menacing', 'rapide', 'épique'],
+    ['Donjon', 'dungeon theme, slow echoing synth pads, dripping water percussion, mysterious and cold', 'lent', 'mystérieuse'],
+    ['Grotte', 'cave ambience, low drones, sparse bell notes, deep echo, quiet and eerie', 'lent', 'mystérieuse'],
+    ['Forêt', 'enchanted forest, harp arpeggios, soft flute, birdsong chimes, gentle and magical', 'moyen', 'rêveuse'],
+    ['Océan', 'ocean theme, flowing marimba, soft waves, steel drum, breezy and calm', 'moyen', 'paisible'],
     ['Désert', 'desert theme, oud melody, hand drums, middle eastern scale, hot and dusty', 'moyen', 'sombre'],
-    ['Neige', 'snowy mountain theme, glockenspiel, music box, soft strings, cold and serene', 'lent', 'joyeuse'],
-    ['Château', 'royal castle theme, brass fanfare, harpsichord, marching snare, noble', 'moyen', 'joyeuse'],
+    ['Neige', 'snowy mountain theme, glockenspiel, music box, soft strings, cold and serene', 'lent', 'paisible'],
+    ['Château', 'royal castle theme, brass fanfare, harpsichord, marching snare, noble', 'moyen', 'héroïque'],
     ['Ville néon', 'synthwave city at night, retro analog synths, gated drums, neon groove', 'moyen', 'sombre'],
-    ['Cimetière', 'haunted graveyard, pipe organ, theremin, slow waltz, spooky', 'lent', 'sombre'],
-    ['Taverne', 'medieval tavern, lute and fiddle jig, tambourine, cheerful and rowdy', 'rapide', 'joyeuse'],
+    ['Cimetière', 'haunted graveyard, pipe organ, theremin, slow waltz, spooky', 'lent', 'étrange'],
+    ['Taverne', 'medieval tavern, lute and fiddle jig, tambourine, cheerful and rowdy', 'rapide', 'festive'],
     ['Boutique', 'item shop theme, bouncy chiptune, bossa nova rhythm, light and catchy', 'moyen', 'joyeuse'],
-    ['Course', 'chase sequence, fast chiptune, racing bassline, urgent drums, adrenaline', 'rapide', 'sombre'],
-    ['Espace', 'outer space theme, shimmering synth pads, slow arpeggiator, vast and dreamy', 'lent', 'joyeuse'],
-    ['Victoire', 'victory fanfare, triumphant brass chiptune, short and joyful', 'rapide', 'joyeuse'],
-    ['Game over', 'game over theme, slow descending chiptune melody, sad and soft', 'lent', 'sombre'],
-    ['Écran titre', 'title screen theme, heroic chiptune melody, rising strings, adventurous', 'moyen', 'joyeuse'],
-    ['Berceuse', 'lullaby, music box and soft piano, tender and sleepy', 'lent', 'joyeuse'],
+    ['Course', 'chase sequence, fast chiptune, racing bassline, urgent drums, adrenaline', 'rapide', 'tendue'],
+    ['Espace', 'outer space theme, shimmering synth pads, slow arpeggiator, vast and dreamy', 'lent', 'rêveuse'],
+    ['Victoire', 'victory fanfare, triumphant brass chiptune, short and joyful', 'rapide', 'festive'],
+    ['Game over', 'game over theme, slow descending chiptune melody, sad and soft', 'lent', 'mélancolique'],
+    ['Écran titre', 'title screen theme, heroic chiptune melody, rising strings, adventurous', 'moyen', 'héroïque'],
+    ['Berceuse', 'lullaby, music box and soft piano, tender and sleepy', 'lent', 'paisible'],
+    ['Romance', 'romantic theme, warm strings, gentle piano, soft harp, heartfelt melody', 'lent', 'romantique'],
+    ['Énigme', 'puzzle theme, plucked pizzicato strings, ticking percussion, curious and quirky', 'moyen', 'étrange'],
+    ['Adieux', 'farewell theme, solo piano and cello, slow and nostalgic', 'lent', 'mélancolique'],
+    ['Marché', 'busy marketplace, accordion, hand percussion, lively and bustling', 'rapide', 'festive'],
+    ['Infiltration', 'stealth mission, muted bass pulses, ticking hi-hats, quiet synth stabs, suspenseful', 'moyen', 'tendue'],
+    ['Légende', 'legendary hero theme, choir and orchestra, big timpani, soaring brass', 'moyen', 'épique'],
   ];
   $('#mkMusThemes').innerHTML = MUS_THEMES.map((t, i) => `<button class="nbs-btn dark sm" data-mt="${i}">${esc(t[0])}</button>`).join('');
   $$('#mkMusThemes [data-mt]').forEach(b => b.onclick = () => {

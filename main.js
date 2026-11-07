@@ -42,7 +42,8 @@ module.exports = ({ ipcMain, protocol, serveFile, readDoc, writeDoc }) => {
     const cur = srv = { proc, token, port: 0 };
     let log = '';
     cur.ready = new Promise((ok, ko) => {
-      const t = setTimeout(() => ko(new Error('Le moteur ne démarre pas.')), 30000);
+      // un moteur trop lent est arrêté : sinon le prochain appel en lance un second sur la même bibliothèque
+      const t = setTimeout(() => { proc.kill(); ko(new Error('Le moteur ne démarre pas.')); }, 30000);
       proc.stdout.on('data', d => {
         const m = /NB_READY (\d+)/.exec(String(d));
         if (m) { cur.port = +m[1]; clearTimeout(t); ok(cur); }

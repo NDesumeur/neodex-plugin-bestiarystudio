@@ -179,6 +179,66 @@ class Studio:
         self.upgrade_types()
         self.upgrade_cap()
         self.upgrade_float()
+        self.upgrade_combat()
+        # la marche refaite de toute la bibliothèque prend plusieurs minutes : en fond, sinon le moteur dépasse les 30 s de démarrage
+        threading.Thread(target=self.upgrade_walk, daemon=True).start()
+
+    def upgrade_combat(self):
+        """Une fois : les objets déjà créés reçoivent leur effet de combat (soin, renfort), utilisable dans l'Arène."""
+        cfg = self.lib.load_config({})
+        if cfg.get("combat1"):
+            return 0
+        done = 0
+        d = nb_make.folder(self.lib.root, "objet")
+        for f in d.glob("*/item.json"):
+            try:
+                rec = json.loads(f.read_text(encoding="utf-8"))
+                if "combat" not in rec:
+                    rec["combat"] = nb_make.combat_of(rec.get("categorie"), rec.get("rarete"))
+                    nb_make.save(self.lib.root, "objet", f.parent.name, rec)
+                    done += 1
+            except Exception as exc:
+                print(f"objet {f.parent.name} : effet de combat non ajouté : {exc}")
+        cfg["combat1"] = 1
+        self.lib.save_config(cfg)
+        return done
+
+    def upgrade_walk(self):
+        """Une fois : la marche de chaque créature refaite avec chaque patte à part (avant, les pattes avant ou arrière
+        bougeaient d'un bloc) et les rampants qui ne gonflent plus. Une nouvelle version : l'ancienne reste avec ◀ ▶."""
+        cfg = self.lib.load_config({})
+        if cfg.get("marche2"):
+            return 0
+        done = 0
+        for rec in self.lib.list():
+            slug = rec["slug"]
+            if self.eng.floats(rec.get("description", ""), rec.get("brief")):
+                continue
+            mirror = rec.get("lab", LAB_DEFAULTS).get("mirror", True)
+            for d in ("bas", "haut", "gauche") + (() if mirror else ("droite",)):
+                view = self._active(slug, d)
+                if view is None:
+                    continue
+                src = ImageOps.mirror(view) if d == "droite" else view
+                try:
+                    frames = self.eng.generate_walk(None, src, "gauche" if d == "droite" else d, rec.get("description", ""),
+                                                    rec.get("seed", 0), brief=rec.get("brief"))
+                except Exception as exc:  # une créature qui résiste ne bloque pas les autres
+                    print(f"marche de {slug} ({d}) non refaite : {exc}")
+                    continue
+                frames = [ImageOps.mirror(f) for f in frames] if d == "droite" else frames
+                for f, im in zip(WALK, frames):
+                    if f != "repos":
+                        self.lib.add_pil(slug, frame_key(d, f), im, "marche refaite")
+            if mirror:
+                self._mirror_walk(slug)
+            self.build_sprites(slug)
+            done += 1
+        cfg["marche2"] = 1
+        self.lib.save_config(cfg)
+        if done:
+            print(f"{done} créature(s) : marche refaite")
+        return done
 
     def upgrade_float(self):
         """Une fois : les créatures qui flottent (sans ailes) perdent leurs images de marche tassées : la même image partout,
@@ -440,7 +500,12 @@ class Studio:
             if kind == "objet":
                 return nb_make.make_object(self.eng, c, self.lib.root, rec, seed, progress, cancel)
             if kind == "attaque":
-                return nb_make.make_attack(self.eng, c, self.lib.root, rec, seed, progress, cancel)
+                verify = None
+                if self.writer.vision_model():
+                    def verify(ims, text):
+                        self._free_gpu()  # le modèle d'image et celui de vision se partagent la carte
+                        return self.writer.match(ims, text, keep_alive="2m", prompt=self.writer.ATTACK_MATCH)
+                return nb_make.make_attack(self.eng, c, self.lib.root, rec, seed, progress, cancel, verify=verify)
             return nb_make.make_music(c, self.lib.root, rec, seed, progress, cancel)
         return self.jobs.start("make-" + kind, run, dict(objet=3, attaque=3, musique=1)[kind])
 

@@ -34,6 +34,32 @@ TRAVEL = {"projectile", "souffle", "rayon", "pluie", "rafale", "fouet"}  # il pa
 C, N = 128, 10                                                  # planche : 10 images de 128 px par ligne
 
 
+# ------------------------------------------------------------------ objets de combat
+# ce qu'un objet fait dans l'Arène, d'après sa catégorie et sa rareté : la nourriture et les potions soignent, une arme monte
+# l'attaque, une armure ou un bouclier la défense, un bijou la vitesse. Écrit dans item.json (« combat »), lu par l'Arène.
+_RAR = ["commun", "peu commun", "rare", "épique", "légendaire"]
+_SOIN = [20, 25, 30, 40, 50]
+_STAT = {"arme": ("attaque", "l'attaque"), "armure": ("defense", "la défense"), "bouclier": ("defense", "la défense"),
+         "bijou": ("vitesse", "la vitesse")}
+
+
+def combat_of(categorie, rarete):
+    r = _RAR.index(rarete) if rarete in _RAR else 0
+    if categorie in ("nourriture", "ingrédient", "potion"):
+        soin = _SOIN[r] if categorie == "nourriture" else _SOIN[r] // 2 if categorie == "ingrédient" else round(_SOIN[r] * 1.5)
+        purge = categorie == "potion" and r >= 2
+        return dict(soin=soin, purge=purge, texte=f"soigne {soin} % des PV" + (" et guérit les statuts" if purge else ""))
+    if categorie in _STAT:
+        stat, nom = _STAT[categorie]
+        n = 2 if r >= 3 else 1
+        return dict(stat=stat, niveaux=n, texte=f"{nom} +{n}")
+    return None
+
+
+assert combat_of("nourriture", "rare")["soin"] == 30 and combat_of("potion", "légendaire")["purge"] and combat_of("clé", "rare") is None
+assert combat_of("arme", "épique") == dict(stat="attaque", niveaux=2, texte="l'attaque +2")
+
+
 def folder(root, kind):
     if kind not in FOLDER:
         raise ValueError("Création inconnue : " + str(kind))
@@ -87,7 +113,7 @@ def make_object(eng, client, root, rec, seed, progress, cancel, versions=3):
     prompt = (f"Pixel art icon of a single video game {what}: {rec['description']}. The whole object is visible and centered, "
               "seen from the front with a slight three-quarter angle, crisp pixels, clean dark outline, vivid colors, flat plain "
               "light gray background, no text, no hand, no character, no cast shadow.")
-    rec.update(versions=0, version=0, seed=seed, created=int(time.time()))
+    rec.update(versions=0, version=0, seed=seed, created=int(time.time()), combat=combat_of(rec.get("categorie"), rec.get("rarete")))
     for i in range(versions):
         if cancel():
             raise RuntimeError("annulé")
@@ -157,10 +183,71 @@ def _ease(k):
     return 1 - (1 - k) ** 3
 
 
+def _wipe(im, k, angle=1.):
+    """L'image révélée en diagonale (un coup de griffe qui traverse) : k de 0 (rien) à 1 (toute)."""
+    w, h = im.size
+    yy, xx = np.mgrid[0:h, 0:w]
+    m = ((xx / w + angle * (1 - yy / h)) / (1 + angle) <= k * 1.15).astype(np.uint8) * 255
+    out = im.copy()
+    out.putalpha(Image.fromarray(np.minimum(np.asarray(im.getchannel("A")), m)))
+    return out
+
+
+def _half(im, top):
+    """La moitié haute ou basse de l'image (les deux mâchoires d'une morsure)."""
+    w, h = im.size
+    out = Image.new("RGBA", (w, h))
+    box = (0, 0, w, h // 2) if top else (0, h // 2, w, h)
+    out.alpha_composite(im.crop(box), box[:2])
+    return out
+
+
 def sheet_rows(genre, cast, hit):
-    """Les 3 lignes de 10 images selon le geste : sur soi, vers la cible (trajet ou rayon), ou au contact."""
+    """Les 3 lignes de 10 images selon le geste : sur soi, vers la cible (trajet ou rayon), ou au contact.
+    Chaque geste a son propre mouvement : sans lui, toutes les attaques créées se ressemblaient (une image qui grossit et tourne)."""
     blank = [Image.new("RGBA", (C * 4, C * 4)) for _ in range(N)]
     t = [i / (N - 1) for i in range(N)]
+    burst = [_put(hit, .25 + .45 * _ease(k), rot=i * 6, alpha=1 - max(0, (k - .55) / .45) ** 1.5, bright=1.25) for i, k in enumerate(t)]
+    if genre == "onde":  # deux anneaux qui s'élargissent l'un après l'autre
+        return [_stack(_put(cast, .2 + .9 * k, alpha=1 - k), _put(hit, .1 + .9 * max(0, k - .35) / .65, alpha=(1 - k) * (k > .35))) for k in t], blank, blank
+    if genre == "explosion":  # un éclair blanc, l'éclatement très vite, puis la fumée qui retombe
+        return [_put(cast if k < .5 else hit, .15 + 1. * _ease(min(1, k * 2.2)), alpha=1 - max(0, k - .55) / .45, bright=2.2 - 1.2 * min(1, k * 3)) for k in t], blank, blank
+    if genre == "cri":  # trois cercles d'onde concentriques, décalés
+        return [_stack(*[_put(cast, .2 + .8 * ((k + j / 3) % 1), alpha=1 - (k + j / 3) % 1) for j in range(3)]) for k in t], blank, blank
+    if genre in ("soin", "renfort"):  # l'aura monte autour du lanceur et s'efface en haut
+        return [_stack(_put(cast, .55 + .1 * math.sin(k * math.pi), dy=int(10 - 28 * k), alpha=min(1, k * 3) * (1 - max(0, k - .7) / .3)),
+                       _put(hit, .4 + .5 * k, alpha=(1 - k) * .6)) for k in t], blank, blank
+    if genre == "pluie":  # des gouttes ou éclats qui tombent en nombre, puis de petites éclaboussures au sol
+        row0 = [_put(cast, .25, dy=-14, alpha=min(1, k * 2), bright=1.2) for k in t]
+        row1 = [_stack(*[_put(cast, .22, dx=(j * 23) % 40 - 20, dy=((i * 9 + j * 17) % 40) - 22) for j in range(5)]) for i in range(N)]
+        row2 = [_stack(*[_put(hit, .12 + .2 * _ease(k), dx=d, dy=8, alpha=1 - k) for d in (-16, 0, 16)]) for k in t]
+        return row0, row1, row2
+    if genre == "rafale":  # une volée de traits : trois copies décalées qui filent
+        row0 = [_put(cast, .2 + .1 * math.sin(k * math.pi), bright=1.3) for k in t]
+        row1 = [_stack(*[_put(cast, .3, dx=((i * 11 + j * 13) % 26) - 13, dy=(j - 1) * 12, sx=1.5) for j in range(3)]) for i in range(N)]
+        row2 = [_stack(*[_put(hit, .15 + .25 * _ease(max(0, k - j * .15)), dx=(j - 1) * 12, dy=(1 - j) * 8, alpha=1 - k) for j in range(3)]) for k in t]
+        return row0, row1, row2
+    if genre == "fouet":  # un arc qui balaie, pas une toupie
+        row0 = [_put(cast, .3, rot=-40 + 20 * k, bright=1.2) for k in t]
+        row1 = [_put(cast, .55, rot=-70 + 140 * _ease(k), sx=1.3) for k in t]
+        return row0, row1, burst
+    if genre == "griffe":  # les marques de griffes qui traversent en diagonale, puis l'éclat
+        return blank, blank, [_stack(_put(_wipe(cast, min(1, k * 1.8)), .8, alpha=1 - max(0, k - .7) / .3),
+                                     _put(hit, .2 + .5 * _ease(max(0, k - .35) / .65), alpha=(1 - k) * (k > .35))) for k in t]
+    if genre == "morsure":  # les deux mâchoires qui se referment, puis la marque des crocs
+        return blank, blank, [_stack(_put(_half(cast, True), .8, dy=int(-16 * (1 - min(1, k * 2)))),
+                                     _put(_half(cast, False), .8, dy=int(16 * (1 - min(1, k * 2)))),
+                                     _put(hit, .3 + .4 * _ease(max(0, k - .45) / .55), alpha=(1 - k) * (k > .45))) if k < .75 else
+                              _put(hit, .7, alpha=(1 - k) * 3) for k in t]
+    if genre == "charge":  # la traînée de vitesse qui arrive de la gauche, puis le choc
+        return blank, blank, [_stack(_put(cast, .6, dx=int(-30 * (1 - min(1, k * 2))), sx=1.6 - .6 * min(1, k * 2), alpha=1 - max(0, k - .5) / .5),
+                                     _put(hit, .3 + .6 * _ease(max(0, k - .4) / .6), alpha=(1 - k) * (k > .4))) for k in t]
+    if genre in ("corne", "dard"):  # une estocade rapide vers l'avant, puis une petite percée
+        return blank, blank, [_stack(_put(cast, .5, dx=int(-24 + 30 * _ease(min(1, k * 2.5))), alpha=1 - max(0, k - .5) / .5),
+                                     _put(hit, .15 + .35 * _ease(max(0, k - .3) / .7), alpha=(1 - k) * (k > .3))) for k in t]
+    if genre == "etreinte":  # les anneaux qui tournent en se resserrant sur la cible
+        return blank, blank, [_stack(_put(cast, .9 - .45 * _ease(k), rot=i * 25, alpha=1 - max(0, k - .75) / .25),
+                                     _put(hit, .3 + .3 * k, alpha=k * (1 - k) * 2)) for i, k in enumerate(t)]
     if genre in SELF:
         row0 = [_stack(_put(cast, .3 + .6 * _ease(min(1, k * 1.6)), rot=i * 7, alpha=1 - max(0, k - .6) / .4, bright=1 + .3 * k),
                        _put(hit, .2 + .8 * _ease(k), alpha=(1 - k) * .8)) for i, k in enumerate(t)]
@@ -225,24 +312,53 @@ GESTE_EN = {
 assert set(GESTE_EN) == set(nb_moves.GENRES), set(nb_moves.GENRES) ^ set(GESTE_EN)
 
 
-def make_attack(eng, client, root, rec, seed, progress, cancel):
+def make_attack(eng, client, root, rec, seed, progress, cancel, verify=None):
+    """verify(images, texte) -> [{"score", "missing"}] : le modèle de vision note chaque dessin ; un dessin sous 5/10 est refait
+    une fois, et le meilleur des deux est gardé."""
     import nb_attack
     e, g = rec["element"], rec["genre"]
     if (e, g) not in nb_moves.CATALOG:
         raise ValueError("Élément ou geste inconnu.")
     rec["rarete"] = nb_moves.get(e, g)["rarete"]  # la rareté vient de sa mécanique (catalogue)
     slug, d = new_slot(root, "attaque", rec["nom"])
-    base = ("Pixel art video game spell effect sprite, crisp pixels, vivid glowing colors, centered, isolated on a pure black "
-            f"background, no character, no creature, no text. {ELEM_EN[e]} element. ")
+    base = ("Pixel art video game attack effect sprite, crisp pixels, centered, isolated on a pure black background, "
+            "no character, no creature, no text. ")
     cast, hit = GESTE_EN[g]
-    keys = (base + f"The attack is {cast}. As it is unleashed: {rec['description']}.",
-            base + f"The impact when it hits: {hit}. {rec['description']}.")
-    imgs = []
+    progress("Lecture de la description")
+    try:  # la plume coupe la description en deux consignes précises (l'énergie, l'impact) ; sans elle, la description telle quelle
+        import nb_writer
+        b = nb_writer.attack_brief(rec["description"], e, g, seed)
+        what_cast, what_hit = b["cast"], b["impact"]
+    except Exception:
+        what_cast = what_hit = rec["description"]
+    keys = (base + f"Draw exactly this: {what_cast}. Every shape, color and detail of this description matters most. "
+                   f"Its general shape: {cast}. Element: {ELEM_EN[e]}.",
+            base + f"Draw exactly this impact: {what_hit}. Every shape, color and detail of this description matters most. "
+                   f"Its general shape: {hit}. Element: {ELEM_EN[e]}.")
+    raw = []
     for i, prompt in enumerate(keys):
         if cancel():
             raise RuntimeError("annulé")
         progress("Dessin de l'effet" if i == 0 else "Dessin de l'impact")
-        im = eng.render(client, eng.MODEL, prompt, seed + i * 77, cancel=cancel)
+        raw.append(eng.render(client, eng.MODEL, prompt, seed + i * 77, cancel=cancel))
+    texts = (what_cast, what_hit)
+    if verify:  # le contrôle visuel : chaque dessin comparé à sa consigne
+        try:
+            progress("Vérification des dessins")
+            sc = [verify([im], t)[0]["score"] for im, t in zip(raw, texts)]
+            for i, s in enumerate(sc):
+                if s >= 5 or cancel():
+                    continue
+                progress(("Nouveau dessin de l'effet" if i == 0 else "Nouveau dessin de l'impact") + f" ({s}/10)")
+                again = eng.render(client, eng.MODEL, keys[i], seed + i * 77 + 9001, cancel=cancel)
+                s2 = verify([again], texts[i])[0]["score"]
+                if s2 > s:
+                    raw[i], sc[i] = again, s2
+            rec["controle"] = sc
+        except Exception as exc:  # pas de modèle de vision, ou il ne répond pas : les dessins restent tels quels
+            print("attaque non vérifiée :", exc)
+    imgs = []
+    for i, im in enumerate(raw):
         im.save(d / f"cle_{i}.png")
         imgs.append(_key(im))
     progress("Animation de la planche")
@@ -343,6 +459,13 @@ def catalog():
 # ------------------------------------------------------------------ musiques
 MUSIC_FILES = ("acestep_v1.5_turbo.safetensors", "qwen_0.6b_ace15.safetensors", "qwen_1.7b_ace15.safetensors", "ace_1.5_vae.safetensors")
 TEMPO = {"lent": 80, "moyen": 110, "rapide": 140}
+# l'ambiance : sa tonalité et quelques mots pour le modèle de musique
+AMBIANCES = {"joyeuse": ("C major", "bright, cheerful"), "sombre": ("A minor", "dark, ominous"),
+             "paisible": ("F major", "peaceful, calm, soft dynamics"), "épique": ("D minor", "epic, grand, powerful, cinematic build-up"),
+             "mystérieuse": ("E minor", "mysterious, enigmatic, suspenseful, sparse"), "mélancolique": ("B minor", "melancholic, nostalgic, bittersweet"),
+             "tendue": ("G minor", "tense, urgent, anxious, pulsing"), "festive": ("G major", "festive, celebratory, upbeat, dancing"),
+             "héroïque": ("D major", "heroic, triumphant, adventurous, soaring melody"), "rêveuse": ("A major", "dreamy, ethereal, floating, airy"),
+             "étrange": ("F# minor", "weird, quirky, off-kilter, playful dissonance"), "romantique": ("E major", "romantic, tender, warm, heartfelt")}
 
 
 def music_graph(tags, lyrics, seconds, seed, bpm, keyscale, language):
@@ -368,8 +491,9 @@ def music_graph(tags, lyrics, seconds, seed, bpm, keyscale, language):
 def make_music(client, root, rec, seed, progress, cancel):
     seconds = max(10, min(240, int(rec.get("duree") or 60)))
     lyrics = (rec.get("paroles") or "").strip()
-    g = music_graph(rec["description"], lyrics or "[Instrumental]", seconds, seed, TEMPO.get(rec.get("tempo"), 110),
-                    "A minor" if rec.get("ambiance") == "sombre" else "C major", "fr" if lyrics else "en")
+    key, mood = AMBIANCES.get(rec.get("ambiance"), AMBIANCES["joyeuse"])
+    g = music_graph(rec["description"] + ", " + mood, lyrics or "[Instrumental]", seconds, seed, TEMPO.get(rec.get("tempo"), 110),
+                    key, "fr" if lyrics else "en")
     slug, d = new_slot(root, "musique", rec["nom"])
     progress(f"Composition ({seconds} s de musique)")
     entry = client.wait(client.queue(g), cancel=cancel)
@@ -388,10 +512,11 @@ if __name__ == "__main__":  # contrôle sans GPU : planches et mises en scène p
     ImageDraw.Draw(cast).ellipse((60, 60, 196, 196), fill=(255, 120, 40))
     k = _key(cast)
     assert k.mode == "RGBA" and k.size[0] == k.size[1]
-    for g in ("onde", "projectile", "rayon", "griffe"):
+    for g in nb_moves.GENRES:
         rows = sheet_rows(g, k, k)
         assert len(rows) == 3 and all(len(r) == N for r in rows)
         s = show(g, "#ffffff")
         assert s["hitAt"] < s["len"] and all(p[1] in (0, 1, 2) for p in s["parts"])
+    assert all(k.split()[1] in ("major", "minor") for k, _ in AMBIANCES.values())
     assert set(TEMPO) and len(catalog()) == len(nb_moves.CATALOG) and sorted(music_graph("x", "y", 30, 1, 100, "C major", "en"), key=int) == [str(i) for i in range(1, 11)]
     print("ok")

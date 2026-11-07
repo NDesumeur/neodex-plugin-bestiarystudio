@@ -173,8 +173,8 @@ ITEM_SPARKS = {
 }
 SYS_ITEM = (
     "Tu inventes des créations pour un jeu vidéo en pixel art. Tu écris en français. Ta description sert directement de "
-    "consigne à un générateur : CLAIRE, CONCRÈTE, en UNE phrase de 15 à 30 mots, sans histoire ni mots abstraits, sans nom "
-    "de jeu ou de personnage existant. Réponds uniquement en JSON.")
+    "consigne à un générateur : CLAIRE et CONCRÈTE, sans histoire ni mots abstraits, sans nom de jeu ou de personnage "
+    "existant. Réponds uniquement en JSON.")
 
 
 def item_idea(kind, ctx=None, seed=None):
@@ -183,19 +183,41 @@ def item_idea(kind, ctx=None, seed=None):
     ctx, spark = ctx or {}, random.Random(seed).choice(ITEM_SPARKS[kind])
     what = {
         "objet": f"un objet de catégorie « {ctx.get('categorie', 'objet')} », de rareté {ctx.get('rarete', 'commun')}. "
-                 "La description dit sa forme, sa matière, ses couleurs et un détail marquant, pour une icône",
+                 "La description, en UNE phrase de 15 à 30 mots, dit sa forme, sa matière, ses couleurs et un détail marquant, pour une icône",
         "attaque": f"une attaque d'élément {ctx.get('element', 'feu')}, au geste « {ctx.get('genre', 'projectile')} ». "
-                   "La description dit à quoi ressemble l'énergie lancée puis l'impact (formes, couleurs, mouvement)",
+                   "La description, en 2 ou 3 phrases (40 à 70 mots), dit dans l'ordre : le LANCER (d'où part l'énergie, "
+                   "sa forme), le TRAJET (forme exacte, taille, deux ou trois couleurs précises, le motif qui la compose : "
+                   "flammèches, éclats de glace, plumes, épines, notes de musique…) puis l'IMPACT (ce qu'on voit sur la cible). "
+                   "Uniquement ce qui se voit : formes, couleurs, nombre d'éléments, mouvement. Une idée qui ne ressemble "
+                   "pas à une simple boule d'énergie",
         "musique": f"une musique de jeu au tempo {ctx.get('tempo', 'moyen')}, d'ambiance {ctx.get('ambiance', 'joyeuse')}. "
-                   "La description donne le style, les instruments principaux et l'énergie (ex. : « chiptune entraînante, "
-                   "basse pulsée, arpèges de synthé, batterie rapide »)",
+                   "La description, en UNE phrase de 15 à 30 mots, donne le style, les instruments principaux et l'énergie "
+                   "(ex. : « chiptune entraînante, basse pulsée, arpèges de synthé, batterie rapide »)",
     }[kind]
     out = _ask(SYS_ITEM, f"Invente {what}. Inspiration : {spark}.\nJSON avec exactement deux clés : \"nom\" (court, en "
                          "français) et \"description\".", seed, temperature=0.95)
-    name, desc = _clean(out.get("nom"), 60), _clean(out.get("description"), 300)
+    name, desc = _clean(out.get("nom"), 60), _clean(out.get("description"), 600 if kind == "attaque" else 300)
     if not desc:
         raise WriterError("La plume n'a rien proposé, réessaie.")
     return dict(name=name, description=desc)
+
+
+SYS_ATTACK = (
+    "Tu prépares la consigne d'un générateur d'images pour l'effet visuel d'une attaque de jeu vidéo en pixel art. "
+    "Tu gardes TOUS les détails de la description (formes, couleurs, nombres, matières, motifs) sans en inventer de "
+    "contraires, et tu les écris en anglais, de façon visuelle et concrète. Réponds uniquement en JSON.")
+
+
+def attack_brief(description, element, genre, seed=1):
+    """{"cast", "impact"} : la description d'une attaque créée, coupée en deux consignes anglaises (l'énergie lancée, l'impact)."""
+    out = _ask(SYS_ATTACK, f"Attaque d'élément {element}, geste « {genre} ».\nDescription : {description}\n"
+               "JSON avec exactement deux clés : \"cast\" (l'énergie lancée et son trajet : forme exacte, taille, couleurs, "
+               "motif, 25 à 50 mots) et \"impact\" (ce qu'on voit quand elle touche : forme, couleurs, éclats, 20 à 40 mots).",
+               seed, temperature=0.3, keep_alive=0)
+    cast, impact = _clean(out.get("cast"), 500), _clean(out.get("impact"), 400)
+    if not cast or not impact:
+        raise WriterError("La plume n'a pas préparé l'attaque.")
+    return dict(cast=cast, impact=impact)
 
 
 def fuse(a, b, seed=None):
@@ -346,7 +368,13 @@ MATCH = ("Here is the description of a creature: {text}\nLook at the picture. Do
          "\"missing\": [short list, in French, of what is missing or wrong]}}.")
 
 
-def match(images, text, keep_alive=0):
+ATTACK_MATCH = ("Here is the description of a video game attack effect (pixel art, glowing on black): {text}\nLook at the picture. "
+                "Does it show exactly this effect? Check the shapes, the colors, the element and what it looks like. "
+                "Answer in JSON: {{\"score\": integer from 0 (nothing like it) to 10 (exactly this effect), "
+                "\"missing\": [short list, in French, of what is missing or wrong]}}.")
+
+
+def match(images, text, keep_alive=0, prompt=None):
     """Ressemblance de chaque image à la description, par le modèle de vision : [{"score": 0..10, "missing": [...]}]."""
     import base64
     import io
@@ -363,7 +391,7 @@ def match(images, text, keep_alive=0):
         bg = bg.crop(box).resize((448, 448))
         buf = io.BytesIO()
         bg.save(buf, "PNG")
-        body = {"model": m, "prompt": MATCH.format(text=text), "images": [base64.b64encode(buf.getvalue()).decode()],
+        body = {"model": m, "prompt": (prompt or MATCH).format(text=text), "images": [base64.b64encode(buf.getvalue()).decode()],
                 "format": "json", "stream": False, "think": False, "options": {"temperature": 0, "num_predict": 160},
                 "keep_alive": keep_alive if k == len(images) - 1 else "2m"}
         req = urllib.request.Request(OLLAMA + "/api/generate", data=json.dumps(body).encode(),

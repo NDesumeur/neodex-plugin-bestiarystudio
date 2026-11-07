@@ -717,6 +717,48 @@ def _leg_masks(im, top):
     return [groups[b] for b in sorted(big, key=lambda b: cx[b])]
 
 
+def _feet_masks(im, top, box):
+    """Chaque patte suivie depuis son pied : les pieds sont les morceaux séparés tout en bas, puis on remonte ligne par ligne
+    vers la hanche ; un morceau qui réunit plusieurs pattes (elles se touchent en haut) est partagé au plus près de chacune,
+    un morceau large qui ne porte qu'un pied (le ventre) reste au corps. [] si on ne trouve pas au moins 2 pieds."""
+    a = np.asarray(im.getchannel("A")) >= 128
+    x0, _, x1, y1 = box
+
+    def runs(y):
+        out, start = [], None
+        for x in range(x0, x1 + 1):
+            on = x < x1 and a[y, x]
+            if on and start is None:
+                start = x
+            elif not on and start is not None:
+                out.append((start, x - 1))
+                start = None
+        return out
+    band = range(y1 - 1, top + (y1 - top) // 3 - 1, -1)  # les deux tiers bas de la zone : des pattes écartées ont leurs pieds plus haut
+    best = max(band, key=lambda y: (len(runs(y)), y))  # la ligne où l'on voit le plus de pieds (la plus basse à égalité)
+    feet = runs(best)
+    if not 2 <= len(feet) <= 10:
+        return []
+    cx = [(r0 + r1) / 2 for r0, r1 in feet]
+    wf = [r1 - r0 + 1 for r0, r1 in feet]
+    masks = [np.zeros_like(a) for _ in feet]
+    for y in range(y1 - 1, top - 1, -1):
+        got = [[] for _ in feet]
+        for r0, r1 in runs(y):
+            mine = [k for k, c in enumerate(cx) if r0 - 2 <= c <= r1 + 2]
+            for x in range(r0, r1 + 1):  # rien au-dessus d'un pied : le corps
+                if not mine:
+                    break
+                k = min(mine, key=lambda k: abs(x - cx[k]))
+                if len(mine) > 1 or r1 - r0 + 1 <= 2.5 * wf[k] + 2 or abs(x - cx[k]) <= wf[k] * .75 + 1:
+                    got[k].append(x)
+        for k, xs in enumerate(got):
+            if xs:
+                masks[k][y, xs] = True
+                cx[k] = sum(xs) / len(xs)  # la patte peut pencher : son centre suit
+    return [m for m in masks if m.sum() >= 4]
+
+
 def _halves(im, top, box):
     """Repli quand les pattes se touchent : deux moitiés, coupées sur la colonne la plus vide près du milieu
     (et non pile au milieu, qui tranchait un pied en deux)."""
@@ -745,14 +787,39 @@ def step_frame(im, direction, phase):
         return im.copy()
     x0, y0, x1, y1 = box
     h, zh = y1 - y0, max(1, y1 - top)
-    masks = _leg_masks(im, top) or _halves(im, top, box)
+    # les pattes : par morceaux séparés, ou suivies depuis les pieds quand elles se touchent (sinon deux moitiés bougeaient
+    # chacune d'un bloc : les deux pattes avant ensemble, les deux arrière ensemble)
+    lm, fm = _leg_masks(im, top), _feet_masks(im, top, box)
+    # un morceau du milieu bien plus large que les autres est le ventre, pas une patte : il reste en place (sinon il passait
+    # pour une patte du milieu et les deux vraies pattes, de chaque côté, se levaient ensemble)
+    # (on y cherche alors les pieds : deux pattes collées sous le ventre sont suivies chacune depuis son pied)
+    if len(lm) >= 3:
+        wid = [int(np.ptp(np.nonzero(m)[1])) + 1 for m in lm]
+        keep = []
+        for k, m in enumerate(lm):
+            if 0 < k < len(lm) - 1 and wid[k] > 1.8 * np.median([w for j, w in enumerate(wid) if j != k]):
+                part = np.asarray(im).copy()
+                part[~m] = 0
+                sub = Image.fromarray(part, "RGBA")
+                keep += _feet_masks(sub, top, sub.getbbox() or box)
+            else:
+                keep.append(m)
+        lm = sorted(keep, key=lambda m: np.nonzero(m)[1].mean())
+    face = direction in ("bas", "haut")  # de face, les morceaux nets d'abord : le suivi depuis les pieds y déchirait les pattes
+    masks = (lm if face and len(lm) >= 2 else fm if len(fm) > len(lm) else lm) or _halves(im, top, box)
     arr = np.asarray(im)
     body = arr.copy()
     body[top:] = 0
+    rest = np.asarray(im.getchannel("A")) >= 128
+    rest[:top] = False
+    for m in masks:
+        rest &= ~m
     out = np.zeros_like(arr)
     swing = max(2, round(zh * .3))
+    # de profil, 4 pattes (avant, avant, arrière, arrière) : chaque paire en opposition, en diagonale (avant proche avec arrière loin)
+    signs = [1, -1, -1, 1] if len(masks) == 4 and direction not in ("bas", "haut") else [1 if k % 2 == 0 else -1 for k in range(len(masks))]
     for k, m in enumerate(masks):
-        sign = 1 if k % 2 == 0 else -1
+        sign = signs[k]
         leg = np.where(m[..., None], arr, 0).astype(arr.dtype)
         moved = np.zeros_like(leg)
         ahead = sign * phase > 0  # la patte qui avance
@@ -776,6 +843,7 @@ def step_frame(im, direction, phase):
     if dy:
         body = np.roll(body, dy, axis=0)
         body[:dy] = 0
+    body[rest] = arr[rest]  # ce qui n'est rattaché à aucune patte (le ventre, une patte non suivie) reste en place au lieu de disparaître
     out = np.where(body[..., 3:] > 0, body, out)  # le corps passe devant le haut des pattes
     return Image.fromarray(out.astype(np.uint8), "RGBA")
 
@@ -816,11 +884,21 @@ def wave(im, direction, phase, amp=.04, waves=1.5, crawl=True):
             return round(a * ramp * math.sin(2 * math.pi * waves * t + off))
         return _rows(im, shift)
 
-    if crawl:  # une chenille, un serpent vu de côté : la bosse avance de la queue vers la tête, le ventre reste au sol
-        def shift(x):
-            t = (x - x0) / max(1, w)
-            return -round(a * 1.4 * max(0., math.sin(2 * math.pi * waves * t - off)) ** 2)
-        return _cols(im, shift)
+    if crawl:  # une chenille, un serpent vu de côté : de petites bosses avancent de la queue vers la tête, le ventre reste au sol
+        # 1 ou 2 px, jamais d'après la taille : plus haut, la créature avait l'air de gonfler et de dégonfler
+        bump = 1 if h < 40 else 2
+
+        arr = np.asarray(im)
+        out = arr.copy()
+        for x in range(x0, x1):
+            k = round(bump * max(0., math.sin(2 * math.pi * 2 * (x - x0) / max(1, w) - off)))
+            ys = np.nonzero(arr[:, x, 3] >= 128)[0]
+            if not k or not len(ys):
+                continue
+            mid = (ys[0] + ys[-1]) // 2  # le dos monte, le bas de la colonne (le ventre) ne bouge pas
+            out[ys[0] - k:mid - k + 1, x] = arr[ys[0]:mid + 1, x]
+            out[mid - k + 1:mid + 1, x] = arr[mid, x]
+        return Image.fromarray(out, "RGBA")
 
     def shift(x):
         t = (x - x0) / max(1, w)
