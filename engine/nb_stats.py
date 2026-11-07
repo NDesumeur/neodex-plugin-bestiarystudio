@@ -43,24 +43,28 @@ BODY = (("tail", "fouet"), ("horn", "corne"), ("tusk", "corne"), ("sting", "dard
         ("wing", "rafale"), ("fang", "morsure"), ("jaw", "morsure"), ("mouth", "morsure"), ("claw", "griffe"),
         ("talon", "griffe"), ("vine", "fouet"))
 BY_TYPE = {"feu": "souffle", "eau": "projectile", "plante": "fouet", "vent": "rafale", "roche": "pluie", "glace": "pluie",
-           "foudre": "rayon", "lumière": "rayon", "ombre": "onde", "esprit": "cri", "acier": "charge", "poison": "dard"}
+           "foudre": "rayon", "lumière": "rayon", "ombre": "onde", "esprit": "cri", "acier": "charge", "poison": "dard",
+           "insecte": "dard", "fée": "onde", "son": "cri"}
 STATUS = nb_moves.STATUS_OF  # élément -> statut infligé (la chance dépend de l'attaque : voir nb_moves)
 
 # table des types, façon Pokémon : élément de l'attaque -> (×2 contre, ×½ contre, ×0 contre). Un double type multiplie
 # les deux (×4, ×¼, ou une faiblesse que l'autre résiste : ×1). L'Arène lit les multiplicateurs dans la fiche de combat.
 EFF = {  # chaque case a sa raison : « une attaque de <ligne> contre une créature de <type> ». Équilibrée : voir le test en bas
-    "feu": (("plante", "glace", "acier"), ("feu", "eau", "roche", "lumière"), ()),  # brûle les plantes, fond la glace et le métal ; l'eau l'éteint, la pierre ne brûle pas, la lumière est déjà flamme
-    "eau": (("feu", "roche", "acier"), ("eau", "plante", "glace"), ()),  # éteint le feu, use la pierre, rouille le métal ; les plantes la boivent, la glace la fige
+    "feu": (("plante", "glace", "acier", "insecte"), ("feu", "eau", "roche", "lumière", "fée"), ()),  # brûle les plantes, fond la glace et le métal ; l'eau l'éteint, la pierre ne brûle pas, la lumière est déjà flamme
+    "eau": (("feu", "roche", "acier", "son"), ("eau", "plante", "glace"), ()),  # éteint le feu, use la pierre, rouille le métal, sous l'eau plus un bruit ; les plantes la boivent, la glace la fige
     "plante": (("eau", "roche"), ("feu", "plante", "vent", "acier", "poison"), ()),  # boit l'eau, ses racines fendent la roche ; le venin la flétrit
-    "vent": (("plante", "poison"), ("roche", "acier", "vent"), ()),  # couche les plantes, chasse les miasmes ; la pierre et le métal ne bougent pas
-    "roche": (("feu", "glace", "vent", "foudre"), ("roche", "acier", "plante"), ()),  # étouffe le feu, brise la glace, abat ce qui vole, met la foudre à la terre ; les racines l'enserrent
+    "vent": (("plante", "poison", "insecte"), ("roche", "acier", "vent", "son"), ()),  # couche les plantes, chasse les miasmes ; la pierre et le métal ne bougent pas
+    "roche": (("feu", "glace", "vent", "foudre"), ("roche", "acier", "plante", "insecte"), ()),  # étouffe le feu, brise la glace, abat ce qui vole, met la foudre à la terre ; les racines l'enserrent
     "glace": (("plante", "vent", "roche"), ("feu", "eau", "glace", "acier"), ()),  # gèle les plantes et les ailes, le gel fend la pierre
     "foudre": (("eau", "vent", "acier"), ("plante", "foudre", "esprit"), ("roche",)),  # l'eau, l'air et le métal conduisent ; la terre l'absorbe, un esprit n'a pas de corps
-    "lumière": (("ombre", "esprit"), ("lumière", "plante", "feu"), ()),  # chasse les ténèbres et les fantômes ; les plantes s'en nourrissent, le feu brille déjà
-    "ombre": (("lumière", "esprit"), ("ombre",), ()),  # éteint la lumière, dévore les esprits
+    "lumière": (("ombre", "esprit"), ("lumière", "plante", "feu", "fée"), ()),  # chasse les ténèbres et les fantômes ; les plantes s'en nourrissent, le feu brille déjà
+    "ombre": (("lumière", "esprit", "son"), ("ombre", "fée"), ()),  # éteint la lumière, dévore les esprits
     "esprit": (("poison", "ombre"), ("lumière", "esprit", "acier"), ()),  # purifie le poison, dissipe les cauchemars ; une machine n'a pas d'âme
     "acier": (("glace", "roche"), ("feu", "eau", "foudre", "acier"), ()),  # brise la glace et la pierre ; fond, rouille, conduit
-    "poison": (("plante", "eau"), ("poison", "acier", "ombre"), ()),  # empoisonne les plantes et l'eau ; ronge mal le métal et ce qui n'a pas de chair
+    "poison": (("plante", "eau", "fée"), ("poison", "acier", "ombre"), ()),  # empoisonne les plantes, l'eau et les fées ; ronge mal le métal et ce qui n'a pas de chair
+    "insecte": (("plante", "fée"), ("vent",), ()),  # dévore les plantes et les ailes des fées ; le vent disperse l'essaim
+    "fée": (("ombre", "son"), ("poison", "insecte"), ()),  # lève les malédictions, son charme fait taire le vacarme ; le venin et les essaims n'y sont pas sensibles
+    "son": (("esprit", "insecte"), ("son", "plante"), ()),  # la cloche chasse les esprits, une note aiguë disperse les essaims ; la mousse l'étouffe
 }
 
 
@@ -81,7 +85,8 @@ LEAN = {"feu": {"attaque": 1.25}, "eau": {"pv": 1.2}, "plante": {"pv": 1.2, "def
         "vent": {"vitesse": 1.35}, "roche": {"defense": 1.4, "vitesse": .8}, "glace": {"defense": 1.15},
         "foudre": {"vitesse": 1.3, "attaque": 1.1}, "lumière": {"attaque": 1.1, "vitesse": 1.1},
         "ombre": {"attaque": 1.25, "defense": .9}, "esprit": {"vitesse": 1.15}, "acier": {"defense": 1.4},
-        "poison": {"pv": 1.1, "attaque": 1.1}}
+        "poison": {"pv": 1.1, "attaque": 1.1}, "insecte": {"vitesse": 1.2, "attaque": 1.1},
+        "fée": {"defense": 1.1, "pv": 1.1}, "son": {"attaque": 1.15, "vitesse": 1.1}}
 # posture -> penchant
 POSTURE_LEAN = {"flotte": {"vitesse": 1.2, "defense": .9}, "vole": {"vitesse": 1.2, "defense": .9}, "rampe": {"vitesse": .85},
                 "sautille": {"vitesse": 1.15}, "roule": {"defense": 1.15}, "glisse": {"pv": 1.2, "vitesse": .8},
@@ -95,6 +100,9 @@ TYPE_FR = {
     "lumière": "soleil, aube, sacré, anges, éclat, or", "ombre": "nuit, ténèbres, cauchemars, prédateurs nocturnes",
     "esprit": "fantômes, âmes, magie de l'esprit, rêves, psychique", "acier": "métal, armures, machines, lames, rouages",
     "poison": "venin, toxines, marais putrides, acide, insectes piqueurs",
+    "insecte": "insectes, araignées, essaims, carapaces de chitine, larves, cocons",
+    "fée": "fées, lutins, charme, magie douce, enchantements, vœux",
+    "son": "musique, cris, cloches, échos, vibrations, instruments",
 }
 KEYWORDS = {
     "feu": r"feu|flamm|braise|brasier|lave|volcan|ardent|incandesc|brûl|cendre|fournaise|soufre|magma|chaleur|phénix|salamandre",
@@ -109,6 +117,9 @@ KEYWORDS = {
     "esprit": r"esprit|fantôme|spectr|âme|psych|rêve|songe|astral|hant|ectoplasm|mage|magie|illusion|médium|feu follet",
     "acier": r"acier|métal|fer\b|armure|lame|rouage|engrenage|machine|mécani|automate|chaîne|cuivre|bronze|robot",
     "poison": r"poison|venin|venim|toxi|acide|putri|pourri|marais|vase|limace|scorpion|araignée|crapaud|miasme|bave|guêpe|frelon",
+    "insecte": r"insecte|scarab|araign|fourmi|guêpe|frelon|abeille|mante|chenille|larve|essaim|cocon|élytre|mandibul|antenne|criquet|sauterelle|cafard|mouche|libellule|papillon|chitine|mille-pattes|scolopendre|cigale|lucane",
+    "fée": r"fée|féeri|lutin|pixie|charme|charmant|enchant|paillette|licorne|farfadet|korrigan|baguette|vœu|nymphe|sylphe|pollen d'or",
+    "son": r"son\b|sonore|musique|musical|chant|chanteu|hurle|hurlement|cloche|écho|vibr|tambour|flûte|violon|harpe|trompe|mélod|grelot|gong|siffl|résonn|clochette|instrument",
 }
 
 
@@ -141,9 +152,9 @@ def choose_type(description, lore_text="", proposed=(), counts=None, exclude=())
     best = max(score.values())
     if best <= 0:  # rien ne parle de type : le moins représenté (jamais « esprit » par défaut)
         return min(score, key=lambda t: (share[t], t == "esprit", t))
-    near = [t for t in score if score[t] >= best - 1.5 and score[t] > 0]
-    # entre types qui se valent : le moins représenté, avec un léger avantage au score
-    return max(near, key=lambda t: (score[t] - 6 * share[t], -share[t]))
+    near = [t for t in score if score[t] >= best - 1 and score[t] > 0]
+    # entre types qui se valent : le moins représenté, mais le score compte d'abord (sinon des types qui ne collent pas)
+    return max(near, key=lambda t: (score[t] - 4 * share[t], -share[t]))
 
 
 def target_type(counts, rnd=random):
@@ -404,4 +415,8 @@ if __name__ == "__main__":
     assert set(split(two)) == {"vent", "foudre"} and " et " in two, two
     assert "lumière" not in choose_types("une ombre de la nuit noire, un démon solaire doré radieux", proposed=["ombre", "lumière"], dual=True)  # NeoMe seul
     assert split("ombre et lumière") == ["ombre", "lumière"] and split("") == []
+    assert len(EFF) == 15 and choose_type("un essaim de scarabées aux élytres dorés", counts=lib) == "insecte"
+    assert choose_type("une petite fée enchanteresse aux ailes de paillettes", counts=lib) == "fée"
+    assert choose_type("une cloche vivante qui hurle et résonne", counts=lib) == "son"
+    assert choose_type("un loup des neiges au pelage de givre", proposed=["ombre"], counts=dict(glace=40)) == "glace"  # le texte prime sur la rareté
     print("ok", dict(c), dict(tiers), k["rarete"], genres)

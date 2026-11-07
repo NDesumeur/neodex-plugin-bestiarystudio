@@ -51,6 +51,9 @@ const HTML = `<link rel="stylesheet" href="${U}ui/studio.css">
             <button class="nbs-btn dark sm" data-t="jeux">Jeux</button>
             <button class="nbs-btn dark sm" data-t="anime">Anime</button>
             <button class="nbs-btn dark sm" data-t="objets">Objets vivants</button>
+            <button class="nbs-btn dark sm" data-t="horreur">Horreur</button>
+            <button class="nbs-btn dark sm" data-t="bizarreries">Bizarreries</button>
+            <button class="nbs-btn dark sm" data-t="slimes">Slimes</button>
             <button class="nbs-btn sm" id="inspire" style="margin-left:auto">${ic('etoile')}Inspire-moi</button>
           </div>
           <span class="nbs-hint" id="inspireMsg"></span>
@@ -103,6 +106,8 @@ const HTML = `<link rel="stylesheet" href="${U}ui/studio.css">
             <span>Geste</span><div class="nbs-parch"><select id="mkGenre"></select></div>
           </div>
           <div data-only="musique">
+            <div class="nbs-title">Thème <span class="nbs-hint">(remplit le style, le tempo et l'ambiance)</span></div>
+            <div class="nbs-row nbs-themes" id="mkMusThemes"></div>
             <div class="nbs-title">Paroles <span class="nbs-hint">(vide : instrumental)</span></div>
             <div class="nbs-parch"><textarea id="mkLyrics" rows="3" placeholder="[couplet]&#10;…"></textarea></div>
             <div class="nbs-row nbs-mkopts" style="margin-top:10px">
@@ -423,7 +428,7 @@ export default async function (ctx) {
     musique: { desc: 'Style de la musique', ph: "chiptune joyeuse pour un village, flûte et percussions 8 bits, ambiance d'aventure…", name: 'Thème du village…' },
   };
   const CATS = ['arme', 'armure', 'bouclier', 'potion', 'nourriture', 'outil', 'bijou', 'trésor', 'clé', 'livre', 'objet du quotidien', 'ingrédient'];
-  const ELEMS = ['feu', 'eau', 'plante', 'vent', 'roche', 'glace', 'foudre', 'lumière', 'ombre', 'esprit', 'acier', 'poison'];
+  const ELEMS = ['feu', 'eau', 'plante', 'vent', 'roche', 'glace', 'foudre', 'lumière', 'ombre', 'esprit', 'acier', 'poison', 'insecte', 'fée', 'son'];
   const opts = (l, lab = x => x) => l.map(x => `<option value="${esc(x)}">${esc(lab(x))}</option>`).join('');
   const fillOpts = () => {  // au premier usage : RAR et GENRE sont déclarés plus bas
     if ($('#mkCat').options.length) return;
@@ -515,6 +520,12 @@ export default async function (ctx) {
   }
 
   // ------------------------------------------------------------ invocation en boucle : rappuyer l'arrête après la créature en cours
+  async function notifyMade() {  // une notification NeoDex par créature finie, avec son image de face
+    if (!ctx.notifications || !S.cr) return;
+    let image = '';
+    try { const b = await (await fetch(src('sprites/bas_repos.png'))).blob(); if (b.size < 380000) image = await new Promise(r => { const f = new FileReader(); f.onload = () => r(f.result); f.onerror = () => r(''); f.readAsDataURL(b); }); } catch {}
+    ctx.notifications.send({ type: 'invocation', title: 'Nouvelle créature : ' + S.cr.name, body: (S.cr.description || 'Invocation en boucle').slice(0, 200), image, open: 'plugin:' + ID }).catch(() => {});
+  }
   $('#auto').onclick = async () => {
     const b = $('#auto');
     if (S.auto) {
@@ -523,14 +534,14 @@ export default async function (ctx) {
       b.disabled = true; b.lastChild.textContent = 'Arrêt après cette créature…';
       return;
     }
-    try { await post('/auto'); } catch (e) { say(e.message, true); return; }
+    try { await post('/auto', { type: $('#crType').value, theme: $('#themes .on')?.dataset.t }); } catch (e) { say(e.message, true); return; }
     S.auto = 'on'; $('#go').hidden = true; $('#cancel').hidden = false; $$('.nbs-redo').forEach(x => x.disabled = true);
     b.lastChild.textContent = 'Arrêter la boucle';
     let made = 0;
     const j = await follow(j => {
       $('#bar').style.width = Math.round(j.progress * 100) + '%';
       say(`${S.auto === 'stop' ? 'Dernière créature · ' : ''}${j.step === 'Préparation' ? 'Préparation… (ComfyUI démarre, ~1 min la première fois)' : j.step + '…'} ${Math.round(j.progress * 100)} % · ${j.made || 0} finie${(j.made || 0) > 1 ? 's' : ''}`);
-      if ((j.made || 0) > made && j.slug) { made = j.made; open(j.slug).catch(() => {}); }
+      if ((j.made || 0) > made && j.slug) { made = j.made; open(j.slug).then(notifyMade, () => {}); }
     });
     S.auto = null; busy(false);
     b.disabled = false; b.lastChild.textContent = 'Invocation en boucle';
@@ -547,6 +558,36 @@ export default async function (ctx) {
   });
   $('#crType').innerHTML = `<option value="">Auto (les types rares d'abord)</option>` + ELEMS.map(t => `<option value="${t}">${t}</option>`).join('');
   $('#crType').onchange = () => { S.idType = ''; };
+  // des thèmes de musique de jeu tout prêts : un clic remplit la description (en mots que le modèle de musique comprend)
+  const MUS_THEMES = [
+    ['Village', 'chiptune, 8-bit, cozy village theme, wooden flute melody, light percussion, warm and peaceful', 'moyen', 'joyeuse'],
+    ['Combat', 'chiptune battle theme, driving bass, fast arpeggios, snare rolls, energetic and tense', 'rapide', 'sombre'],
+    ['Boss', 'epic boss battle, heavy 16-bit synth, pounding drums, organ, dramatic and menacing', 'rapide', 'sombre'],
+    ['Donjon', 'dungeon theme, slow echoing synth pads, dripping water percussion, mysterious and cold', 'lent', 'sombre'],
+    ['Grotte', 'cave ambience, low drones, sparse bell notes, deep echo, quiet and eerie', 'lent', 'sombre'],
+    ['Forêt', 'enchanted forest, harp arpeggios, soft flute, birdsong chimes, gentle and magical', 'moyen', 'joyeuse'],
+    ['Océan', 'ocean theme, flowing marimba, soft waves, steel drum, breezy and calm', 'moyen', 'joyeuse'],
+    ['Désert', 'desert theme, oud melody, hand drums, middle eastern scale, hot and dusty', 'moyen', 'sombre'],
+    ['Neige', 'snowy mountain theme, glockenspiel, music box, soft strings, cold and serene', 'lent', 'joyeuse'],
+    ['Château', 'royal castle theme, brass fanfare, harpsichord, marching snare, noble', 'moyen', 'joyeuse'],
+    ['Ville néon', 'synthwave city at night, retro analog synths, gated drums, neon groove', 'moyen', 'sombre'],
+    ['Cimetière', 'haunted graveyard, pipe organ, theremin, slow waltz, spooky', 'lent', 'sombre'],
+    ['Taverne', 'medieval tavern, lute and fiddle jig, tambourine, cheerful and rowdy', 'rapide', 'joyeuse'],
+    ['Boutique', 'item shop theme, bouncy chiptune, bossa nova rhythm, light and catchy', 'moyen', 'joyeuse'],
+    ['Course', 'chase sequence, fast chiptune, racing bassline, urgent drums, adrenaline', 'rapide', 'sombre'],
+    ['Espace', 'outer space theme, shimmering synth pads, slow arpeggiator, vast and dreamy', 'lent', 'joyeuse'],
+    ['Victoire', 'victory fanfare, triumphant brass chiptune, short and joyful', 'rapide', 'joyeuse'],
+    ['Game over', 'game over theme, slow descending chiptune melody, sad and soft', 'lent', 'sombre'],
+    ['Écran titre', 'title screen theme, heroic chiptune melody, rising strings, adventurous', 'moyen', 'joyeuse'],
+    ['Berceuse', 'lullaby, music box and soft piano, tender and sleepy', 'lent', 'joyeuse'],
+  ];
+  $('#mkMusThemes').innerHTML = MUS_THEMES.map((t, i) => `<button class="nbs-btn dark sm" data-mt="${i}">${esc(t[0])}</button>`).join('');
+  $$('#mkMusThemes [data-mt]').forEach(b => b.onclick = () => {
+    const [name, desc, tempo, mood] = MUS_THEMES[b.dataset.mt];
+    $('#mkDesc').value = desc; $('#mkTempo').value = tempo; $('#mkMood').value = mood;
+    if (!$('#mkName').value.trim()) $('#mkName').value = 'Thème ' + name.toLowerCase();
+    $$('#mkMusThemes [data-mt]').forEach(x => x.classList.toggle('on', x === b));
+  });
   $('#mkInspire').onclick = async () => {
     const b = $('#mkInspire'), msg = $('#mkInspireMsg');
     b.disabled = true; msg.textContent = 'La plume réfléchit…';

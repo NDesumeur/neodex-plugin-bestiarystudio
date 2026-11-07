@@ -28,7 +28,7 @@ CATS = {"arme": "weapon", "armure": "armor piece", "bouclier": "shield", "potion
         "objet du quotidien": "everyday object", "ingrédient": "crafting ingredient"}
 ELEM_EN = {"feu": "fire", "eau": "water", "plante": "plant and leaves", "vent": "wind", "roche": "rock and earth", "glace": "ice",
            "foudre": "lightning", "lumière": "holy light", "ombre": "shadow", "esprit": "spirit and psychic", "acier": "steel",
-           "poison": "poison"}
+           "poison": "poison", "insecte": "insect and chitin", "fée": "fairy magic and sparkles", "son": "sound and music"}
 SELF = {"onde", "explosion", "soin", "renfort", "cri"}        # l'effet reste sur le lanceur
 TRAVEL = {"projectile", "souffle", "rayon", "pluie", "rafale", "fouet"}  # il part vers la cible
 C, N = 128, 10                                                  # planche : 10 images de 128 px par ligne
@@ -202,6 +202,29 @@ def _fresh(rec):
     return rec
 
 
+# le geste de chaque attaque, en toutes lettres pour le modèle : sans lui, il dessinait une boule d'énergie quel que soit le geste
+GESTE_EN = {
+    "griffe": ("three sharp parallel claw slash marks tearing diagonally through the air", "a burst of three crossed claw scratches"),
+    "morsure": ("a pair of huge fanged jaws snapping shut, upper and lower rows of teeth", "jagged tooth marks and a bite shockwave"),
+    "charge": ("a rushing body-sized impact trail with speed lines, a battering charge", "a heavy collision shockwave with debris"),
+    "fouet": ("a long whip-like tail or vine lashing in a curved arc", "a crack of a whip, a thin curved slash with sparks"),
+    "corne": ("a single huge pointed horn thrusting forward like a spear", "a piercing star-shaped stab burst"),
+    "dard": ("a thin sharp stinger needle jabbing forward, dripping venom", "a small puncture burst with venom droplets"),
+    "etreinte": ("thick coiling tendrils wrapping in a tight ring, squeezing and constricting, a crushing hug", "a ring of tightened coils crushing the center"),
+    "projectile": ("a single compact missile orb flying forward with a short trail", "the orb bursting on contact into shards"),
+    "souffle": ("a wide cone of breath spreading out from a mouth, billowing", "a cloud of breath washing over the target"),
+    "rayon": ("a straight thin continuous laser beam", "a bright beam impact flare"),
+    "cri": ("concentric sound wave arcs and rings spreading outward from a screaming mouth, a roar shockwave", "vibrating sound rings and musical shock arcs"),
+    "rafale": ("many fast thin streaks shooting forward in a volley", "a scatter of small streak impacts"),
+    "pluie": ("many drops or shards falling from the sky in a downpour", "a splash zone of many small impacts on the ground"),
+    "onde": ("expanding rings radiating all around from the center", "a wide circular ripple"),
+    "explosion": ("a round blast exploding outward in every direction", "a huge round explosion with smoke"),
+    "soin": ("soft rising sparkles and glowing crosses, a healing aura, no damage", "a gentle glow of healing light"),
+    "renfort": ("a protective aura with upward arrows, a power-up", "a shining shield aura"),
+}
+assert set(GESTE_EN) == set(nb_moves.GENRES), set(nb_moves.GENRES) ^ set(GESTE_EN)
+
+
 def make_attack(eng, client, root, rec, seed, progress, cancel):
     import nb_attack
     e, g = rec["element"], rec["genre"]
@@ -211,8 +234,9 @@ def make_attack(eng, client, root, rec, seed, progress, cancel):
     slug, d = new_slot(root, "attaque", rec["nom"])
     base = ("Pixel art video game spell effect sprite, crisp pixels, vivid glowing colors, centered, isolated on a pure black "
             f"background, no character, no creature, no text. {ELEM_EN[e]} element. ")
-    keys = (base + f"The energy of this attack as it is unleashed: {rec['description']}.",
-            base + f"The impact burst of this attack when it hits, radial symmetry: {rec['description']}.")
+    cast, hit = GESTE_EN[g]
+    keys = (base + f"The attack is {cast}. As it is unleashed: {rec['description']}.",
+            base + f"The impact when it hits: {hit}. {rec['description']}.")
     imgs = []
     for i, prompt in enumerate(keys):
         if cancel():
@@ -239,7 +263,7 @@ def thumb_from(sheet, genre):
 
 
 def catalog_thumbs(root):
-    """Vignettes 64 px des 204 attaques du catalogue (l'image d'impact de leur effet), faites une fois."""
+    """Vignettes 64 px des attaques du catalogue (l'image d'impact de leur effet), faites une fois."""
     import nb_attack
     d = folder(root, "attaque") / "_catalogue"
     d.mkdir(exist_ok=True)
@@ -369,5 +393,5 @@ if __name__ == "__main__":  # contrôle sans GPU : planches et mises en scène p
         assert len(rows) == 3 and all(len(r) == N for r in rows)
         s = show(g, "#ffffff")
         assert s["hitAt"] < s["len"] and all(p[1] in (0, 1, 2) for p in s["parts"])
-    assert set(TEMPO) and len(catalog()) == 204 and sorted(music_graph("x", "y", 30, 1, 100, "C major", "en"), key=int) == [str(i) for i in range(1, 11)]
+    assert set(TEMPO) and len(catalog()) == len(nb_moves.CATALOG) and sorted(music_graph("x", "y", 30, 1, 100, "C major", "en"), key=int) == [str(i) for i in range(1, 11)]
     print("ok")

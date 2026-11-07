@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""NeoBestiary Studio - le catalogue des attaques : une par élément et par geste (12 x 17 = 204), chacune avec son nom
+"""NeoBestiary Studio - le catalogue des attaques : une par élément et par geste (15 x 17 = 255), chacune avec son nom
 et sa mécanique : statut infligé avec un % de chance, statistiques baissées ou montées (chez l'ennemi ou chez soi),
 précision, priorité, coups multiples, vol de vie, contrecoup, coups critiques, soins.
 
 Le geste (griffe, souffle…) donne la forme de l'attaque et son animation ; l'élément donne le statut et la couleur.
 nb_stats choisit les gestes de la créature, puis prend ici l'attaque qui correspond à (élément, geste).
 """
-ELEMENTS = ("feu", "eau", "plante", "vent", "roche", "glace", "foudre", "lumière", "ombre", "esprit", "acier", "poison")
+ELEMENTS = ("feu", "eau", "plante", "vent", "roche", "glace", "foudre", "lumière", "ombre", "esprit", "acier", "poison", "insecte", "fée", "son")
 GENRES = ("griffe", "morsure", "charge", "fouet", "corne", "dard", "etreinte", "projectile", "souffle", "rayon", "cri",
           "rafale", "pluie", "onde", "explosion", "soin", "renfort")
 
@@ -55,12 +55,21 @@ NAMES = {
     "poison": ("Griffe toxique", "Croc venimeux", "Charge putride", "Fouet empoisonné", "Corne de venin", "Dard toxique",
                "Étreinte visqueuse", "Crachat acide", "Souffle toxique", "Rayon corrosif", "Sifflement venimeux",
                "Rafale de miasmes", "Pluie acide", "Onde toxique", "Explosion fétide", "Antidote", "Mue venimeuse"),
+    "insecte": ("Griffe de mante", "Mandibules", "Charge du scarabée", "Fouet d'antennes", "Corne de lucane", "Dard de frelon",
+                "Étreinte de soie", "Crachat de larves", "Souffle d'essaim", "Rayon d'élytres", "Stridulation",
+                "Nuée bourdonnante", "Pluie de criquets", "Onde de la ruche", "Éclosion du nid", "Gelée royale", "Mue chitineuse"),
+    "fée": ("Griffe de rosée", "Morsure lutine", "Charge enchantée", "Fouet de fil d'or", "Corne de licorne", "Dard de pollen",
+            "Étreinte charmeuse", "Poussière de fée", "Souffle doré", "Rayon de lune", "Chant des lutins", "Tourbillon féerique",
+            "Pluie de paillettes", "Onde de charme", "Éclat de prisme", "Baiser de fée", "Vœu"),
+    "son": ("Griffe vibrante", "Morsure hurlante", "Charge sonique", "Fouet de cordes", "Corne de brume", "Dard aigu",
+            "Étreinte du silence", "Note perçante", "Souffle de cor", "Rayon ultrason", "Hurlement", "Rafale de tambours",
+            "Pluie de notes", "Onde de choc", "Fracas", "Berceuse", "Crescendo"),
 }
 
 # le statut de chaque élément (eau : pas de statut, elle trempe et ralentit)
 STATUS_OF = {"feu": "brûlure", "glace": "gel", "foudre": "paralysie", "poison": "poison", "plante": "sommeil",
              "vent": "confusion", "esprit": "confusion", "ombre": "saignement", "acier": "saignement", "roche": "peur",
-             "lumière": "éblouissement"}
+             "lumière": "éblouissement", "insecte": "poison", "fée": "sommeil", "son": "confusion"}
 # ce que fait chaque statut (le combat de l'Arène suit ces règles)
 STATUSES = {
     "brûlure": "perd 1/16 de ses PV à chaque tour et frappe 25 % moins fort",
@@ -131,7 +140,10 @@ def _base(genre, elem):
             "ombre": [_eff("attaque", 1, "soi"), _eff("vitesse", 1, "soi")],
             "esprit": [_eff("attaque", 1, "soi"), _eff("defense", 1, "soi")],
             "plante": [_eff("defense", 1, "soi")], "eau": [_eff("defense", 1, "soi")],
-            "poison": [_eff("attaque", 1, "soi"), _eff("defense", 1, "soi")]}[elem])
+            "poison": [_eff("attaque", 1, "soi"), _eff("defense", 1, "soi")],
+            "insecte": [_eff("attaque", 1, "soi"), _eff("vitesse", 1, "soi")],
+            "fée": [_eff("defense", 1, "soi"), _eff("precision", 1, "soi")],
+            "son": [_eff("attaque", 1, "soi"), _eff("precision", 1, "soi")]}[elem])
         if elem in ("plante", "eau"):
             m["soin"] = 15
     return {k: v for k, v in m.items() if v is not None and v is not False and v != []}
@@ -205,7 +217,7 @@ def describe(m):
 
 if __name__ == "__main__":
     names = [m["nom"] for m in CATALOG.values()]
-    assert len(CATALOG) == 204 and len(set(names)) == 204, [n for n in names if names.count(n) > 1]
+    assert len(CATALOG) == len(ELEMENTS) * len(GENRES) == len(set(names)), [n for n in names if names.count(n) > 1]
     assert all(len(NAMES[e]) == len(GENRES) for e in ELEMENTS)
     assert all(describe(m) or m["genre"] in ("charge",) for m in CATALOG.values())
     from collections import Counter

@@ -72,6 +72,21 @@ ARCHETYPES = [
     (r"elementaire", None, "an elemental: a body made entirely of its element (stone, fire, water or air), glowing core"),
     (r"momie|mummy", "deux_jambes", "a mummy: a humanoid wrapped in old bandages, glowing eyes between the wraps"),
     (r"vampire", "deux_jambes", "a vampire: a pale aristocrat with fangs, red eyes and a high-collared cape"),
+    (r"spirale|colimacon", None, "a spiral horror: its body or face twists into a tight spiral pattern, eerie and organic, "
+     "drawn with clean lines"),
+    (r"slime d|slime a|slime de|slime-", "rampe", "a slime variant: a round glossy jelly blob, its material clearly shown "
+     "(honey, lava, cloud, ink...), simple dot eyes inside, a highlight on top"),
+    (r"parapluie|kasa", "sautille", "a kasa-obake: a closed paper umbrella hopping on one leg, one big eye and a long tongue"),
+    (r"lanterne en papier|chochin", "flotte", "a paper lantern spirit: a floating paper lantern split into a grinning mouth, "
+     "one eye, a long tongue"),
+    (r"poupee", "deux_jambes", "a living doll: a small porcelain or rag doll standing by itself, glassy eyes, stitched seams"),
+    (r"crabe qui vole|crabe du poids", "quatre_pattes", "an oddity crab: a pale ghostly crab with a stone-like shell and "
+     "a faint glow, ominous and quiet"),
+    (r"esprit ne d|ne d.un sentiment|de la (jalousie|rumeur|melancolie|solitude|vanite)", None, "an oddity: a spirit born "
+     "from a feeling, an animal shape made of soft glowing ink lines and floating paper charms"),
+    (r"cloche (vivante|de temple)", "sautille", "a living bell: a bronze temple bell with eyes and a clapper tongue"),
+    (r"essaim|nuee", "flotte", "a swarm creature: many small insects packed together into one floating shape with two eyes"),
+    (r"\bfee\b|lutin|pixie", "vole", "a fairy: a tiny winged sprite with dragonfly wings and a faint sparkling glow"),
 ]
 _COMPILED = [(re.compile(rx), posture, traits) for rx, posture, traits in ARCHETYPES]
 
@@ -92,5 +107,6 @@ if __name__ == "__main__":
     assert match("un tyrannœil violet")[0][0] == "flotte"
     assert "Cerberus" in match("un chien des enfers à trois têtes")[0][1]
     assert not match("une vache rouge")
+    assert match("un slime de miel")[0][0] == "rampe" and match("une fée des bois")[0][0] == "vole"
     assert says_posture("une hydre qui flotte") and not says_posture("une hydre verte")
     print("ok")

@@ -489,9 +489,10 @@ class Studio:
             return slug
         return self.jobs.start("sketch", run, SKETCHES + 2, slug), slug
 
-    def auto(self):
+    def auto(self, typ=None, theme=None):
         """Invocation en boucle : une idée au hasard, ses esquisses, la meilleure (vérifiée) choisie toute seule, toute la
         créature, puis la suivante, jusqu'à /auto-stop (qui laisse finir la créature en cours) ou /cancel (tout de suite)."""
+        self.auto_type, self.auto_theme = typ, theme
         if self.jobs.get()["running"]:
             raise RuntimeError(busy_text(self.jobs.get()["kind"]))
         self.auto_stop = False
@@ -517,8 +518,9 @@ class Studio:
     def _auto_one(self, progress, cancel, n):
         progress(f"Créature {n} : idée")
         self._free_gpu()  # la plume a besoin de la carte
-        typ = nb_stats.target_type(self._type_counts())  # le type d'abord (les rares d'abord), la créature autour
-        idea = self.writer.idea(random.choice([t for t in self.writer.THEMES if t != "melange"] + ["melange"]), typ=typ)
+        typ = getattr(self, "auto_type", None) if getattr(self, "auto_type", None) in nb_stats.CHART else nb_stats.target_type(self._type_counts())  # le type d'abord (choisi, ou les rares d'abord)
+        theme = getattr(self, "auto_theme", None) if getattr(self, "auto_theme", None) in self.writer.THEMES else random.choice([t for t in self.writer.THEMES if t != "melange"] + ["melange"])
+        idea = self.writer.idea(theme, typ=typ)
         seed = random.randrange(10 ** 6)
         rec = self.lib.new_record(idea["name"] or "Créature")
         rec.update(slug=self._unique_slug(idea["name"] or "Créature"), description=idea["description"], seed=seed,
@@ -620,6 +622,25 @@ class Studio:
         self.lib.save(rec)
         return brief
 
+    def _check_back(self, c, dirs, design, seed, brief, description, progress, cancel):
+        """De dos, on ne doit voir ni visage ni yeux : le modèle de vision trie les versions (sans yeux d'abord) ; si toutes
+        en montrent encore, une version de plus est refaite avec la consigne renforcée."""
+        seen = self._look(dirs["haut"])
+        if not seen:
+            return dirs
+        eyes = lambda v: v.get("eyes") if isinstance(v.get("eyes"), int) else 0
+        order = sorted(range(len(seen)), key=lambda i: eyes(seen[i]) > 0)
+        dirs["haut"] = [dirs["haut"][i] for i in order] + dirs["haut"][len(seen):]
+        if eyes(seen[order[0]]) > 0:
+            progress("Vue de dos : le visage se voit encore, nouvel essai depuis le profil")
+            ref = dirs.get("gauche", [None])[0] or ImageOps.mirror(design)
+            im = self.eng.generate_facing(c, "haut", [ref], seed + 31, progress, cancel, brief=brief, description=description)
+            again = self._look([im])
+            ok = bool(again) and eyes(again[0]) == 0
+            dirs["haut"] = [im] + dirs["haut"] if ok else dirs["haut"] + [im]
+            dirs["back_eyes"] = not ok  # build_sprites effacera les yeux du sprite de dos
+        return dirs
+
     def _rest(self, c, slug, seed, progress, cancel):
         """Dos, profils et marche à partir du design actif (tout est refait : les 4 directions restent cohérentes)."""
         rec = self.lib.load(slug)
@@ -628,6 +649,11 @@ class Studio:
         legs = self.eng.has_legs(rec["description"], brief)
         dirs = self.eng.generate_directions(c, design, seed, progress, cancel, legs=legs,
                                             brief=brief, description=rec["description"])
+        dirs = self._check_back(c, dirs, design, seed, brief, rec["description"], progress, cancel)
+        if dirs.pop("back_eyes", False):
+            rec = self.lib.load(slug)
+            rec["back_eyes"] = True
+            self.lib.save(rec)
         if not legs:
             dirs = self._check_profile(c, dirs, design, dirs["haut"][0], seed, brief, rec["description"], progress, cancel)
         for d in ("haut", "gauche"):  # droite : le miroir de la gauche active, posé par _mirror_walk
@@ -645,7 +671,7 @@ class Studio:
         except Exception as exc:  # pas d'Ollama : la créature est faite quand même, la fiche s'écrira plus tard
             print("fiche non écrite :", exc)
         self._portrait(self.client(), slug, progress, cancel)
-        self._illustration(self.client(), slug, progress, cancel)
+        self._illustration_from_model(slug)  # l'image du bestiaire : le rendu du modèle lui-même (« Refaire » en tire d'autres)
         return slug
 
     def _portrait(self, c, slug, progress, cancel):
@@ -671,6 +697,16 @@ class Studio:
         self.lib.add_pil(slug, "portrait", im, "portrait : " + move.get("nom", move["genre"]) + note)
         self.lib.set_active(slug, "portrait", 10 ** 6)
         self.build_sprites(slug)
+
+    def _illustration_from_model(self, slug):
+        """L'image du bestiaire prise sur le rendu de face du modèle : la carte montre exactement la créature dessinée."""
+        design = self._active(slug, "bas")
+        if design is None:
+            return
+        box = design.getbbox()
+        self.lib.add_pil(slug, "illustration", design.crop(box) if box else design, "rendu du modèle")
+        self.lib.set_active(slug, "illustration", 10 ** 6)
+        self._pixel_illustration(slug)
 
     ILLUSTRATIONS = 3  # images du bestiaire tirées, la plus fidèle (modèle de vision) devient active
 
@@ -1372,6 +1408,8 @@ class Studio:
         sprites = sp.run_batch(items, opts, master_key="bas_repos", lock_palette=bool(lab["lock_palette"]))
         sd = self.lib.sprites_dir(slug)
         for k, im in sprites:
+            if k.startswith("haut_") and rec.get("back_eyes"):  # de dos, pas de visage
+                im = nb_anim.no_eyes(im.convert("RGBA"))
             im.save(sd / f"{k}.png")
         for k, _ in sprites:  # les retouches pixel du Sprite Lab passent par-dessus
             e = sd / "edits" / f"{k}.png"
@@ -1673,7 +1711,7 @@ def make_handler(studio, token):
         "/set-types": lambda b: studio.set_types(b["slug"], b.get("types")),
         "/set-attack": lambda b: studio.set_attack(b["slug"], b.get("index", 0), b.get("id")),
         "/cancel": lambda b: studio.jobs.cancel() or dict(ok=True),
-        "/auto": lambda b: dict(job=studio.auto()),
+        "/auto": lambda b: dict(job=studio.auto(b.get("type"), b.get("theme"))),
         "/auto-stop": lambda b: setattr(studio, "auto_stop", True) or dict(ok=True),
         "/redo": lambda b: dict(job=studio.redo(b["slug"], b["dir"])),
         "/continue": lambda b: dict(job=studio.finish(b["slug"], b["index"])),

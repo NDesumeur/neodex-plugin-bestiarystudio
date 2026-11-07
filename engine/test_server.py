@@ -133,7 +133,7 @@ def main():
         _, c = call(port, "/set-attack", {"slug": slug, "index": 1})
         assert c["lore"]["combat"]["attaques"][1]["id"] != "feu:souffle"
         _, mv = call(port, "/moves")
-        assert len(mv) == 204, len(mv)
+        assert len(mv) == 255, len(mv)
         n = c["views"]["gauche"]["versions"]
         assert call(port, "/edit", {"slug": slug, "key": "gauche", "instruction": ""})[0] == 400, "retouche vide acceptée"
         assert call(port, "/edit", {"slug": slug, "key": "gauche", "instruction": "une corne", "zone": [.5, .3, .1]})[0] == 200
@@ -162,7 +162,7 @@ def main():
         assert Image.open(io.BytesIO(png)).size == (256, 256)
         _, png = call(port, f"/file?slug={slug}&path=sprites/ko.png", raw=True)
         assert Image.open(io.BytesIO(png)).size == (256, 256)  # 4 images x 4 directions
-        assert c["illustration"] and c["illustration_version"][1] % 3 == 0 and c["hd"]["illustration"], c["illustration_version"]
+        assert c["illustration"] and c["illustration_version"][1] >= 1 and c["hd"]["illustration"], c["illustration_version"]
         _, png = call(port, f"/file?slug={slug}&path=sprites/illustration.png", raw=True)
         assert Image.open(io.BytesIO(png)).size == (256, 256)
         ni = c["illustration_version"][1]

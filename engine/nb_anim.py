@@ -96,6 +96,21 @@ def blink(im, comps=None):
     return out
 
 
+def no_eyes(im):
+    """Vue de dos où le modèle a laissé le visage : les yeux repeints de la couleur de la peau autour (sans paupière)."""
+    out = blink(im)
+    px, src = out.load(), im.load()
+    for comp in eyes(im):
+        cs = set(comp)
+        ring = [src[nx, ny] for x, y in comp for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1))
+                if (nx, ny) not in cs and 0 <= nx < CELL and 0 <= ny < CELL and src[nx, ny][3] >= 128]
+        if ring:
+            skin = max(set(ring), key=ring.count)
+            for x, y in comp:
+                px[x, y] = skin
+    return out
+
+
 def idle(rest, direction="bas", move=None):
     """move(image, direction, phase) : une créature qui ne tient pas en place (ailes, ondulation) bouge aussi à l'arrêt."""
     rest = rest.convert("RGBA")
@@ -183,6 +198,8 @@ if __name__ == "__main__":  # auto-test : une créature ronde avec deux yeux
         anims = build(r, direction)
         for name, frames in anims.items():
             assert len(frames) == len(ANIMS[name]) and all(f.size == (CELL, CELL) for f in frames), name
+    n = no_eyes(r)
+    assert not eyes(n) and n.getpixel((25, 33)) == (120, 80, 160, 255)
     assert hurt(r, "bas")[1].getbbox()[1] < r.getbbox()[1]  # recule vers le haut quand elle regarde en bas
     assert ko(r, "bas")[3].getchannel("A").histogram()[255] < r.getchannel("A").histogram()[255] // 2
     print("ok")

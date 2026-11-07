@@ -111,8 +111,8 @@ def idea(theme="melange", seed=None, typ=None):
 
 
 def brief(description, seed=1):
-    if "trois têtes" in description:  # le test du contrôle : 1 esquisse ratée, puis un profil avec pattes refusé
-        LOOKS[:] = [dict(heads=1, legs=0)] + [dict(heads=3, legs=0)] * 3 + [dict(heads=3, legs=2)] * (TRIES + 1)             + [dict(heads=3, legs=0)]
+    if "trois têtes" in description:  # le test du contrôle : 1 esquisse ratée, le dos (bon), puis un profil avec pattes refusé
+        LOOKS[:] = [dict(heads=1, legs=0)] + [dict(heads=3, legs=0)] * 3 + [dict(heads=3, legs=0)] * TRIES + [dict(heads=3, legs=2)] * (TRIES + 1)             + [dict(heads=3, legs=0)]
         return dict(posture="flotte", pattes=0, en="a floating test creature", profil="a round body",
                     anatomie=["3 heads: side by side"])
     return dict(posture="quatre_pattes", pattes=4, en="a test creature", profil="a round body")
@@ -155,7 +155,7 @@ def generate_illustration(client, design, seed, progress=lambda m: None, cancel=
 
 
 def look(images, keep_alive=0):
-    return [LOOKS.pop(0) if LOOKS else {"heads": 1, "eyes": 2, "legs": 4} for _ in images]
+    return [LOOKS.pop(0) if LOOKS else {"heads": 1, "legs": 4} for _ in images]  # (sans « eyes » : de dos, rien à refaire)
 
 
 def lore(name, description, seed=1):

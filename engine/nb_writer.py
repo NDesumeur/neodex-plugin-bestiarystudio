@@ -12,7 +12,7 @@ import nb_stats
 
 OLLAMA = "http://127.0.0.1:11434"
 PREFERRED = ("mistral-nemo", "mistral-small", "mistral", "qwen3:8b", "qwen2.5", "llama3.1", "gemma3", "gemma2")
-TYPES = ("feu", "eau", "plante", "vent", "roche", "glace", "foudre", "lumière", "ombre", "esprit", "acier", "poison")
+TYPES = ("feu", "eau", "plante", "vent", "roche", "glace", "foudre", "lumière", "ombre", "esprit", "acier", "poison", "insecte", "fée", "son")
 
 # des graines d'inspiration tirées au hasard : sans elles le modèle ressort toujours les mêmes idées
 THEMES = {
@@ -65,6 +65,20 @@ THEMES = {
         "poupée de chiffon", "sandale de paille", "cloche de temple", "masque de théâtre", "bouteille à génie", "coussin qui respire",
         "marionnette sans fils", "boîte à musique", "pot de terre à bras", "balai qui court", "casque de samouraï",
         "dé à jouer géant", "chapeau de sorcier vorace", "sac à dos glouton", "lampe à huile", "bouclier à visage"]),
+    "horreur": ("horreur organique façon manga d'épouvante (spirales, corps qui se déforment), sans copier une œuvre", [
+        "visage pris dans une spirale", "corps qui s'enroule en colimaçon", "trous réguliers dans la peau", "sourire trop large",
+        "cheveux vivants qui rampent", "poupée aux yeux qui suivent", "ombre qui ne suit plus son corps", "silhouette trop longue",
+        "masque de chair", "foule de visages fondus", "escargot à visage humain", "ballon à tête flottante", "bouche dans la paume",
+        "mannequin qui marche seul", "corps fait de fils emmêlés", "statue qui respire", "insecte à visage de poupée", "tête qui se dédouble"]),
+    "bizarreries": ("bizarrerie à la façon des récits d'apparitions modernes : un esprit né d'un sentiment ou d'une rumeur", [
+        "crabe qui vole le poids des gens", "escargot qui égare les passants", "singe qui exauce les vœux de travers", "chat qui absorbe le stress",
+        "serpent de la jalousie", "abeille de la fièvre", "oiseau de la rumeur", "chien du mensonge", "ombre qui garde un secret",
+        "statue du regret", "papillon des souvenirs perdus", "poisson de la mélancolie", "araignée des promesses", "renard de la vanité",
+        "lanterne de la solitude", "cerf des adieux", "miroir de l'envie", "cloche des remords"]),
+    "slimes": ("slime ou créature de gelée : une forme simple, ronde et brillante, avec une idée originale", [
+        "slime de miel", "slime de lave refroidie", "slime de nuage", "slime-bulle de savon", "slime de mercure", "slime avec un objet avalé",
+        "slime de gelée royale", "slime de neige fondue", "slime d'encre", "slime de cristal", "slime de mousse végétale", "slime de vase",
+        "slime à couronne", "slime jumeau collé", "slime de thé", "slime de poussière d'étoile", "slime géant qui se divise", "slime d'huile"]),
 }
 THEMES["melange"] = ("mélange libre de toutes ces sources", [w for _, ws in THEMES.values() for w in ws])
 

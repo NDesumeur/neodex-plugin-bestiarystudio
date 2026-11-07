@@ -103,7 +103,8 @@ def _poison(d, x, y, s, k, p):
 
 
 MOTIF = {"feu": _feu, "eau": _eau, "plante": _plante, "vent": _vent, "roche": _roche, "glace": _glace,
-         "foudre": _foudre, "lumière": _lumiere, "ombre": _ombre, "esprit": _esprit, "acier": _acier, "poison": _poison}
+         "foudre": _foudre, "lumière": _lumiere, "ombre": _ombre, "esprit": _esprit, "acier": _acier, "poison": _poison,
+         "insecte": _poison, "fée": _lumiere, "son": _vent}  # les trois derniers types reprennent un motif voisin (dard, éclat, souffle)
 MOTIF = {e: (lambda f: lambda d, x, y, s, k, p: f(d, x, y, max(2, s), k, p))(f) for e, f in MOTIF.items()}  # 2 px au moins
 
 
@@ -340,7 +341,7 @@ if __name__ == "__main__":  # planche de contrôle : python nb_attack_sig.py pla
     import sys
     import nb_attack
     rows = [(e, g) for e in MOTIF for g in LAYOUT]
-    assert len(rows) == 120 and len(SIGNED) == 120
+    assert len(rows) == len(SIGNED) == len(MOTIF) * len(LAYOUT)
     sheet = Image.new("RGBA", (64 * 4 * 6 + 5 * 8, 64 * ((len(rows) + 5) // 6 + 1)), (40, 36, 52, 255))
     for n, (e, g) in enumerate(rows):
         pal = tuple(nb_attack._rgb(c) for c in nb_attack.PALETTE[e])

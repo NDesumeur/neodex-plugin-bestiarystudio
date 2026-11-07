@@ -9,7 +9,9 @@ import math
 import re
 import uuid
 
+import numpy as np
 from PIL import Image, ImageChops, ImageOps
+from scipy import ndimage
 
 import nb_archetypes
 import nb_auto
@@ -481,7 +483,7 @@ GENRE_EN = {"griffe": "a slashing claw strike", "morsure": "a lunging bite, jaws
             "onde": "a shockwave bursting around it", "rayon": "firing an energy beam"}
 ELEMENT_EN = {"feu": "fire", "eau": "water", "plante": "plant", "vent": "wind", "roche": "rock", "glace": "ice",
               "foudre": "lightning", "lumière": "light", "ombre": "shadow", "esprit": "spirit", "acier": "steel",
-              "poison": "poison"}
+              "poison": "poison", "insecte": "insect swarm", "fée": "fairy sparkles", "son": "sound waves"}
 
 
 def portrait_prompt(move, brief=None, description=""):
@@ -694,44 +696,88 @@ def leg_zone(im):
     return top, box
 
 
-def step_frame(im, direction, phase):
-    """Un pas procédural à partir de la pose de repos : mêmes pixels, seules les pattes bougent.
+def _leg_masks(im, top):
+    """Chaque patte à part : les morceaux de silhouette sous `top`, de gauche à droite. Les miettes (un orteil détaché
+    par la découpe) suivent la patte la plus proche : elles ne s'envolent plus seules. [] si on ne trouve pas 2 à 10 pattes."""
+    a = np.asarray(im.getchannel("A")) >= 128
+    zone = a.copy()
+    zone[:top] = False
+    lab, n = ndimage.label(zone, structure=np.ones((3, 3)))
+    if n < 2:
+        return []
+    sizes = ndimage.sum(zone, lab, range(1, n + 1))
+    big = [k + 1 for k, v in enumerate(sizes) if v >= max(6, zone.sum() * .05)]
+    if not 2 <= len(big) <= 10:
+        return []
+    cx = {k: np.nonzero(lab == k)[1].mean() for k in range(1, n + 1)}
+    groups = {b: lab == b for b in big}
+    for k in range(1, n + 1):
+        if k not in groups:
+            groups[min(big, key=lambda b: abs(cx[b] - cx[k]))] |= lab == k
+    return [groups[b] for b in sorted(big, key=lambda b: cx[b])]
 
-    face / dos : les pattes d'un côté se lèvent (phase +1 = côté gauche de l'image, -1 = droit ; ±0.5 = demi-pas).
-    profil (tête à gauche) : pattes avant et arrière se balancent en sens opposé (cisaillement du bas des pattes).
-    Au pas complet, le corps descend d'un pixel (appui) : la marche se lit mieux.
+
+def _halves(im, top, box):
+    """Repli quand les pattes se touchent : deux moitiés, coupées sur la colonne la plus vide près du milieu
+    (et non pile au milieu, qui tranchait un pied en deux)."""
+    a = np.asarray(im.getchannel("A")) >= 128
+    x0, _, x1, y1 = box
+    mid, r = (x0 + x1) // 2, max(1, (x1 - x0) // 6)
+    cut = min(range(mid - r, mid + r + 1), key=lambda x: (a[top:y1, x].sum(), abs(x - mid)))
+    left = np.zeros_like(a)
+    left[top:, :cut] = a[top:, :cut]
+    right = np.zeros_like(a)
+    right[top:, cut:] = a[top:, cut:]
+    return [m for m in (left, right) if m.any()]
+
+
+def step_frame(im, direction, phase):
+    """Un pas procédural à partir de la pose de repos : mêmes pixels, seules les pattes bougent, chacune à part.
+
+    Les pattes voisines sont en opposition (droite/gauche, avant/arrière : la marche en diagonale des quadrupèdes).
+    profil (tête à gauche) : chaque patte pivote depuis la hanche (cisaillement nul en haut, fort au pied) ; celle qui
+    passe devant lève le pied au demi-pas. face / dos : la patte qui avance se lève et se raccourcit, l'autre porte.
+    Au pas complet, le corps descend d'un pixel (appui).
     """
     im = im.convert("RGBA")
     top, box = leg_zone(im)
     if top is None:
         return im.copy()
     x0, y0, x1, y1 = box
-    h, zh = y1 - y0, y1 - top
-    body = im.copy()
-    body.paste((0, 0, 0, 0), (0, top, im.width, im.height))
-    legs = im.copy()
-    legs.paste((0, 0, 0, 0), (0, 0, im.width, top))
-    out = Image.new("RGBA", im.size, (0, 0, 0, 0))
-    mid = (x0 + x1) // 2
-    if direction in ("bas", "haut"):
-        lift = max(1, round(h * .045 * abs(phase)))
-        up = 1 if phase > 0 else -1
-        for side, (a, b) in ((1, (0, mid)), (-1, (mid, im.width))):
-            part = legs.crop((a, 0, b, im.height))
-            out.alpha_composite(part, (a, -lift if side == up else 0))
-    else:
-        swing = max(2, round(zh * .32))
-        for front, (a, b) in ((True, (0, mid)), (False, (mid, im.width))):  # tête à gauche : l'avant est à gauche
-            part = legs.crop((a, 0, b, im.height))
-            sign = (-1 if front else 1) * phase
-            sheared = Image.new("RGBA", part.size, (0, 0, 0, 0))
+    h, zh = y1 - y0, max(1, y1 - top)
+    masks = _leg_masks(im, top) or _halves(im, top, box)
+    arr = np.asarray(im)
+    body = arr.copy()
+    body[top:] = 0
+    out = np.zeros_like(arr)
+    swing = max(2, round(zh * .3))
+    for k, m in enumerate(masks):
+        sign = 1 if k % 2 == 0 else -1
+        leg = np.where(m[..., None], arr, 0).astype(arr.dtype)
+        moved = np.zeros_like(leg)
+        ahead = sign * phase > 0  # la patte qui avance
+        if direction in ("bas", "haut"):
+            lift = max(1, round(h * .07 * abs(phase))) if ahead else 0
+            moved[:arr.shape[0] - lift] = leg[lift:]
+        else:
+            lift = round(zh * .14) if ahead and abs(phase) == .5 else 0
             for y in range(top, y1):
-                dx = round(sign * swing * (y - top) / max(1, zh))
-                row = part.crop((0, y, part.width, y + 1))
-                sheared.paste(row, (dx, y), row)  # paste accepte un décalage négatif
-            out.alpha_composite(sheared, (a, 0))
-    out.alpha_composite(body, (0, 1 if abs(phase) >= 1 and h >= 24 else 0))  # le corps passe devant le haut des pattes
-    return out
+                dx = -round(sign * phase * swing * (y - top) / zh)  # vers la gauche = vers l'avant
+                src = leg[y]
+                dst = moved[y - lift] if y - lift >= top else None
+                if dst is None:
+                    continue
+                if dx >= 0:
+                    dst[dx:] = np.where(src[:arr.shape[1] - dx, 3:] > 0, src[:arr.shape[1] - dx], dst[dx:])
+                else:
+                    dst[:dx] = np.where(src[-dx:, 3:] > 0, src[-dx:], dst[:dx])
+        out = np.where(moved[..., 3:] > 0, moved, out)
+    dy = 1 if abs(phase) >= 1 and h >= 24 else 0
+    if dy:
+        body = np.roll(body, dy, axis=0)
+        body[:dy] = 0
+    out = np.where(body[..., 3:] > 0, body, out)  # le corps passe devant le haut des pattes
+    return Image.fromarray(out.astype(np.uint8), "RGBA")
 
 
 def _rows(im, shift):
@@ -752,7 +798,7 @@ def _cols(im, shift):
     return out
 
 
-def wave(im, direction, phase, amp=.04, waves=1.5):
+def wave(im, direction, phase, amp=.04, waves=1.5, crawl=True):
     """Ondulation (serpent, ver, poisson) : une vague parcourt le corps, nulle à la tête, ample vers la queue.
     Face / dos : balancement de gauche à droite ; profil (tête à gauche) : le corps ondule de haut en bas."""
     im = im.convert("RGBA")
@@ -770,6 +816,12 @@ def wave(im, direction, phase, amp=.04, waves=1.5):
             return round(a * ramp * math.sin(2 * math.pi * waves * t + off))
         return _rows(im, shift)
 
+    if crawl:  # une chenille, un serpent vu de côté : la bosse avance de la queue vers la tête, le ventre reste au sol
+        def shift(x):
+            t = (x - x0) / max(1, w)
+            return -round(a * 1.4 * max(0., math.sin(2 * math.pi * waves * t - off)) ** 2)
+        return _cols(im, shift)
+
     def shift(x):
         t = (x - x0) / max(1, w)
         return round(a * t * math.sin(2 * math.pi * waves * t + off))
@@ -777,7 +829,7 @@ def wave(im, direction, phase, amp=.04, waves=1.5):
 
 
 def swim(im, direction, phase):
-    return wave(im, direction, phase, amp=.03, waves=.75)
+    return wave(im, direction, phase, amp=.03, waves=.75, crawl=False)  # un poisson ondule librement, il ne touche pas le sol
 
 
 def _rescale(im, sx, sy):

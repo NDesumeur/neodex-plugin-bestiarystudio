@@ -33,6 +33,8 @@ PALETTE = {
     "foudre": ("#4a3a08", "#f5d020", "#fff27a", "#ffffff"), "lumière": ("#5a4810", "#f2c25b", "#fff0a8", "#ffffff"),
     "ombre": ("#120a1c", "#4a2f5c", "#8a5ab8", "#d8b8ff"), "esprit": ("#2a1f48", "#7a6ae0", "#b9a8ff", "#f2eaff"),
     "acier": ("#22262e", "#8a93a3", "#cfd6e0", "#ffffff"), "poison": ("#2a0f38", "#8a3ab8", "#b8e04a", "#f0ffc0"),
+    "insecte": ("#26300c", "#7a9a1c", "#c8e050", "#f4ffc0"), "fée": ("#4a1a40", "#e06ab8", "#ffb8e8", "#fff0fa"),
+    "son": ("#1a2a3a", "#5aa8c8", "#a8e8f0", "#ffffff"),
 }
 
 
