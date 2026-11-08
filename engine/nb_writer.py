@@ -6,13 +6,15 @@ Le texte passe par Ollama (http://127.0.0.1:11434), s'il est installé avec un m
 import json
 import random
 import urllib.request
+from pathlib import Path
 
 import nb_archetypes
 import nb_stats
 
 OLLAMA = "http://127.0.0.1:11434"
 PREFERRED = ("mistral-nemo", "mistral-small", "mistral", "qwen3:8b", "qwen2.5", "llama3.1", "gemma3", "gemma2")
-TYPES = ("feu", "eau", "plante", "vent", "roche", "glace", "foudre", "lumière", "ombre", "esprit", "acier", "poison", "insecte", "fée", "son")
+TYPES = ("feu", "eau", "plante", "vent", "roche", "glace", "foudre", "lumière", "ombre", "esprit", "acier", "poison", "insecte", "fée", "son",
+           "temps", "encre", "gravité")
 
 # des graines d'inspiration tirées au hasard : sans elles le modèle ressort toujours les mêmes idées
 THEMES = {
@@ -108,10 +110,46 @@ def _get(path, timeout=3):
         return json.loads(r.read())
 
 
+def _ollama_exe():
+    """ollama.exe s'il est installé (à l'endroit où son installateur le met, ou dans le PATH), sinon None."""
+    import os
+    import shutil
+    p = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe"
+    return str(p) if p.is_file() else shutil.which("ollama")
+
+
+_started = [0.0]
+
+
+def _tags():
+    """La liste des modèles d'Ollama. Ollama installé mais arrêté (fermé, pas lancé avec Windows) : démarré en fond, puis
+    attendu jusqu'à 30 s ; occupé à charger un modèle : on lui laisse 15 s au lieu de 3 pour répondre."""
+    import subprocess
+    import time
+    try:
+        return _get("/api/tags", timeout=15)
+    except Exception:
+        exe = _ollama_exe()
+        if not exe:
+            raise
+        if time.time() - _started[0] > 60:  # au plus un lancement par minute
+            _started[0] = time.time()
+            subprocess.Popen([exe, "serve"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        end = time.time() + 30
+        while True:
+            time.sleep(1)
+            try:
+                return _get("/api/tags", timeout=5)
+            except Exception:
+                if time.time() > end:
+                    raise
+
+
 def model():
     """Le modèle de texte à utiliser, ou None si Ollama n'est pas là (ou n'a aucun modèle)."""
     try:
-        names = [m["name"] for m in _get("/api/tags").get("models", [])]
+        names = [m["name"] for m in _tags().get("models", [])]
     except Exception:
         return None
     for want in PREFERRED:
@@ -124,7 +162,8 @@ def model():
 def _ask(system, prompt, seed, temperature=0.8, keep_alive=None):
     m = model()
     if not m:
-        raise WriterError("Pour écrire, installe Ollama (ollama.com) puis un modèle : « ollama pull mistral-nemo ».")
+        raise WriterError("Ollama est installé mais ne répond pas : relance-le depuis le menu Démarrer." if _ollama_exe() else
+                          "Pour écrire, installe Ollama (ollama.com) puis un modèle : « ollama pull mistral-nemo ».")
     body = {"model": m, "system": system, "prompt": prompt, "format": "json", "stream": False, "think": False,
             "options": {"temperature": temperature, "seed": int(seed), "num_predict": 1000}}
     if keep_alive is not None:  # 0 : le modèle de texte rend la carte tout de suite au dessin
@@ -151,7 +190,8 @@ def idea(theme="melange", seed=None, typ=None):
     rnd = random.Random(seed)
     sparks = rnd.sample(words, 2)
     prompt = (f"Thème : {label}. Inspiration de départ : {sparks[0]}, avec une touche de {sparks[1]}.\n"
-              + (f"Elle est de type {typ} : son corps, ses couleurs et ses matières le montrent au premier coup d'œil.\n" if typ else "")
+              + (f"Elle est de type {typ} ({nb_stats.TYPE_FR.get(typ, typ)}) : son corps, ses couleurs et ses matières le montrent "
+                 "au premier coup d'œil.\n" if typ else "")
               + "Invente une créature originale. JSON avec exactement deux clés : "
               "\"nom\" (un nom inventé, court, qui sonne bien en français) et \"description\" (la consigne de dessin).")
     out = _ask(SYS_IDEA, prompt, seed, temperature=0.95)
@@ -322,7 +362,7 @@ LOOK = ("Look at this creature. Count carefully, one by one: how many heads, how
 def vision_model():
     """Un modèle d'Ollama qui voit les images (gemma3, qwen2.5vl…), ou None."""
     try:
-        names = [m["name"] for m in _get("/api/tags").get("models", [])]
+        names = [m["name"] for m in _tags().get("models", [])]
     except Exception:
         return None
     for want in VISION:
