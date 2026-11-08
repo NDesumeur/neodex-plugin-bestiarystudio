@@ -483,7 +483,9 @@ GENRE_EN = {"griffe": "a slashing claw strike", "morsure": "a lunging bite, jaws
             "onde": "a shockwave bursting around it", "rayon": "firing an energy beam"}
 ELEMENT_EN = {"feu": "fire", "eau": "water", "plante": "plant", "vent": "wind", "roche": "rock", "glace": "ice",
               "foudre": "lightning", "lumière": "light", "ombre": "shadow", "esprit": "spirit", "acier": "steel",
-              "poison": "poison", "insecte": "insect swarm", "fée": "fairy sparkles", "son": "sound waves"}
+              "poison": "poison", "insecte": "insect swarm", "fée": "fairy sparkles", "son": "sound waves",
+              "temps": "golden clockwork and swirling hourglass sand", "encre": "black ink splashes and calligraphy strokes",
+              "gravité": "purple gravity distortion with orbiting rocks"}
 
 
 def portrait_prompt(move, brief=None, description=""):

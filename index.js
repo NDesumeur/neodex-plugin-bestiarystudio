@@ -428,7 +428,7 @@ export default async function (ctx) {
     musique: { desc: 'Style de la musique', ph: "chiptune joyeuse pour un village, flûte et percussions 8 bits, ambiance d'aventure…", name: 'Thème du village…' },
   };
   const CATS = ['arme', 'armure', 'bouclier', 'potion', 'nourriture', 'outil', 'bijou', 'trésor', 'clé', 'livre', 'objet du quotidien', 'ingrédient'];
-  const ELEMS = ['feu', 'eau', 'plante', 'vent', 'roche', 'glace', 'foudre', 'lumière', 'ombre', 'esprit', 'acier', 'poison', 'insecte', 'fée', 'son'];
+  const ELEMS = ['feu', 'eau', 'plante', 'vent', 'roche', 'glace', 'foudre', 'lumière', 'ombre', 'esprit', 'acier', 'poison', 'insecte', 'fée', 'son', 'temps', 'encre', 'gravité'];
   const opts = (l, lab = x => x) => l.map(x => `<option value="${esc(x)}">${esc(lab(x))}</option>`).join('');
   const fillOpts = () => {  // au premier usage : RAR et GENRE sont déclarés plus bas
     if ($('#mkCat').options.length) return;

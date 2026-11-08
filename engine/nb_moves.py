@@ -6,7 +6,8 @@ précision, priorité, coups multiples, vol de vie, contrecoup, coups critiques,
 Le geste (griffe, souffle…) donne la forme de l'attaque et son animation ; l'élément donne le statut et la couleur.
 nb_stats choisit les gestes de la créature, puis prend ici l'attaque qui correspond à (élément, geste).
 """
-ELEMENTS = ("feu", "eau", "plante", "vent", "roche", "glace", "foudre", "lumière", "ombre", "esprit", "acier", "poison", "insecte", "fée", "son")
+ELEMENTS = ("feu", "eau", "plante", "vent", "roche", "glace", "foudre", "lumière", "ombre", "esprit", "acier", "poison", "insecte", "fée", "son",
+            "temps", "encre", "gravité")
 GENRES = ("griffe", "morsure", "charge", "fouet", "corne", "dard", "etreinte", "projectile", "souffle", "rayon", "cri",
           "rafale", "pluie", "onde", "explosion", "soin", "renfort")
 
@@ -64,12 +65,23 @@ NAMES = {
     "son": ("Griffe vibrante", "Morsure hurlante", "Charge sonique", "Fouet de cordes", "Corne de brume", "Dard aigu",
             "Étreinte du silence", "Note perçante", "Souffle de cor", "Rayon ultrason", "Hurlement", "Rafale de tambours",
             "Pluie de notes", "Onde de choc", "Fracas", "Berceuse", "Crescendo"),
+    "temps": ("Griffe des âges", "Morsure du sablier", "Charge rétrograde", "Fouet d'aiguilles", "Corne d'horloge",
+              "Dard de seconde", "Étreinte figée", "Grains de sable", "Souffle des siècles", "Rayon d'éternité", "Tic-tac funeste",
+              "Rafale d'instants", "Pluie de rouille", "Onde temporelle", "Fin des temps", "Retour en arrière", "Accélération"),
+    "encre": ("Griffe calligraphe", "Morsure d'encre", "Charge de plume", "Fouet de pinceau", "Corne de sceau", "Dard de plume",
+              "Étreinte de papier", "Tache d'encre", "Souffle de suie", "Rayon de caractères", "Formule interdite",
+              "Rafale de pages", "Pluie d'encre", "Onde de glyphes", "Pâté explosif", "Réécriture", "Pli d'origami"),
+    "gravité": ("Griffe pesante", "Morsure d'abîme", "Charge orbitale", "Fouet de comète", "Corne de plomb", "Dard de météore",
+                "Étreinte du vide", "Débris en orbite", "Souffle du néant", "Rayon d'attraction", "Grondement sourd",
+                "Rafale de poussière d'astre", "Pluie de météores", "Onde de masse", "Effondrement", "Point d'équilibre",
+                "Apesanteur"),
 }
 
 # le statut de chaque élément (eau : pas de statut, elle trempe et ralentit)
 STATUS_OF = {"feu": "brûlure", "glace": "gel", "foudre": "paralysie", "poison": "poison", "plante": "sommeil",
              "vent": "confusion", "esprit": "confusion", "ombre": "saignement", "acier": "saignement", "roche": "peur",
-             "lumière": "éblouissement", "insecte": "poison", "fée": "sommeil", "son": "confusion"}
+             "lumière": "éblouissement", "insecte": "poison", "fée": "sommeil", "son": "confusion",
+             "temps": "paralysie", "encre": "éblouissement", "gravité": "peur"}  # figé dans l'instant, aveuglé d'encre, écrasé
 # ce que fait chaque statut (le combat de l'Arène suit ces règles)
 STATUSES = {
     "brûlure": "perd 1/16 de ses PV à chaque tour et frappe 25 % moins fort",
@@ -143,7 +155,9 @@ def _base(genre, elem):
             "poison": [_eff("attaque", 1, "soi"), _eff("defense", 1, "soi")],
             "insecte": [_eff("attaque", 1, "soi"), _eff("vitesse", 1, "soi")],
             "fée": [_eff("defense", 1, "soi"), _eff("precision", 1, "soi")],
-            "son": [_eff("attaque", 1, "soi"), _eff("precision", 1, "soi")]}[elem])
+            "son": [_eff("attaque", 1, "soi"), _eff("precision", 1, "soi")],
+            "temps": [_eff("vitesse", 2, "soi")], "encre": [_eff("precision", 1, "soi"), _eff("attaque", 1, "soi")],
+            "gravité": [_eff("defense", 1, "soi"), _eff("attaque", 1, "soi")]}[elem])
         if elem in ("plante", "eau"):
             m["soin"] = 15
     return {k: v for k, v in m.items() if v is not None and v is not False and v != []}

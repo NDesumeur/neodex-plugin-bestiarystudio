@@ -133,7 +133,7 @@ def main():
         _, c = call(port, "/set-attack", {"slug": slug, "index": 1})
         assert c["lore"]["combat"]["attaques"][1]["id"] != "feu:souffle"
         _, mv = call(port, "/moves")
-        assert len(mv) == 255, len(mv)
+        assert len(mv) == 18 * 17, len(mv)
         n = c["views"]["gauche"]["versions"]
         assert call(port, "/edit", {"slug": slug, "key": "gauche", "instruction": ""})[0] == 400, "retouche vide acceptée"
         assert call(port, "/edit", {"slug": slug, "key": "gauche", "instruction": "une corne", "zone": [.5, .3, .1]})[0] == 200

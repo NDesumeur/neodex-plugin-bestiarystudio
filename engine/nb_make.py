@@ -28,7 +28,8 @@ CATS = {"arme": "weapon", "armure": "armor piece", "bouclier": "shield", "potion
         "objet du quotidien": "everyday object", "ingrédient": "crafting ingredient"}
 ELEM_EN = {"feu": "fire", "eau": "water", "plante": "plant and leaves", "vent": "wind", "roche": "rock and earth", "glace": "ice",
            "foudre": "lightning", "lumière": "holy light", "ombre": "shadow", "esprit": "spirit and psychic", "acier": "steel",
-           "poison": "poison", "insecte": "insect and chitin", "fée": "fairy magic and sparkles", "son": "sound and music"}
+           "poison": "poison", "insecte": "insect and chitin", "fée": "fairy magic and sparkles", "son": "sound and music",
+           "temps": "time, clockwork and hourglass", "encre": "ink, paper and calligraphy", "gravité": "gravity and orbiting stones"}
 SELF = {"onde", "explosion", "soin", "renfort", "cri"}        # l'effet reste sur le lanceur
 TRAVEL = {"projectile", "souffle", "rayon", "pluie", "rafale", "fouet"}  # il part vers la cible
 C, N = 128, 10                                                  # planche : 10 images de 128 px par ligne
