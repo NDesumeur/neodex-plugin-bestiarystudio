@@ -35,6 +35,8 @@ PALETTE = {
     "acier": ("#22262e", "#8a93a3", "#cfd6e0", "#ffffff"), "poison": ("#2a0f38", "#8a3ab8", "#b8e04a", "#f0ffc0"),
     "insecte": ("#26300c", "#7a9a1c", "#c8e050", "#f4ffc0"), "fée": ("#4a1a40", "#e06ab8", "#ffb8e8", "#fff0fa"),
     "son": ("#1a2a3a", "#5aa8c8", "#a8e8f0", "#ffffff"),
+    "temps": ("#3a2a10", "#b08a3a", "#e8d08a", "#fff8dc"), "encre": ("#08080e", "#23233a", "#5a5a8a", "#c8c8e8"),
+    "gravité": ("#140a26", "#4a2a8a", "#8a6ad8", "#e0d0ff"),
 }
 
 
@@ -197,6 +199,8 @@ def _decor(im, element, seed):
         elif element == "acier":
             d.line((x - 3, y + 3, x + 3, y - 3), fill=core, width=1)
             d.point((x + 3, y - 3), fill=light)
+        elif element in sig.MOTIF:  # les autres types : leur motif signé en petit (bestiole, fleur, croche, sablier…)
+            sig.MOTIF[element](d, x, y, 2, r.randint(0, 5), (dark, mid, light, core))
     return im
 
 

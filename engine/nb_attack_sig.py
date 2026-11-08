@@ -3,9 +3,9 @@
 commune du geste repeinte aux couleurs de l'élément.
 
 Chaque élément a son motif dessiné au pixel (flammèche, goutte, feuille, volute, éclat de roche, cristal, éclair,
-étincelle, ombre, orbe, lame, bulle) ; chaque geste a sa façon de le disposer et de le faire bouger sur les 4 images
+étincelle, ombre, orbe, lame, bulle, bestiole, fleur, croche, sablier, éclaboussure, astre lourd) ; chaque geste a sa façon de le disposer et de le faire bouger sur les 4 images
 (élan, frappe, impact, retour) : griffes, mâchoires, charge, fouet, projectile, souffle, rayon, pluie, onde, explosion.
-12 éléments x 10 gestes = 120 visuels. Plus les 4 visuels de NeoMe (créature n° 0), qui n'appartiennent qu'à lui.
+18 éléments x 10 gestes = 180 visuels, chacun avec son motif. Plus les 4 visuels de NeoMe (créature n° 0), qui n'appartiennent qu'à lui.
 Les gestes sans visuel signé (corne, dard, étreinte, cri, rafale, soin, renfort) gardent leur forme commune.
 Dessiné vers le bas, ancre en haut (32, 4), comme nb_attack ; onde et explosion sont centrées (32, 32).
 """
@@ -102,9 +102,83 @@ def _poison(d, x, y, s, k, p):
         d.line((x + s // 2, y + s, x + s // 2, y + s + 2), fill=p[1])
 
 
+def _temps(d, x, y, s, k, p):  # sablier : le sable passe d'une moitié à l'autre selon la variante
+    w, h = s, s + 1
+    d.polygon([(x - w, y - h), (x + w, y - h), (x, y)], outline=p[1])
+    d.polygon([(x - w, y + h), (x + w, y + h), (x, y)], outline=p[1])
+    f = (k % 3) / 2  # 0 : tout en haut, 1 : tout en bas
+    top, bot = round((1 - f) * (h - 1)), round(f * (h - 1))
+    if top > 0:
+        d.polygon([(x - w * top / h, y - top), (x + w * top / h, y - top), (x, y)], fill=p[2])
+    if bot > 0:
+        d.polygon([(x - w * bot / h, y + h), (x + w * bot / h, y + h), (x, y + h - bot)], fill=p[2])
+    d.line((x - w - 1, y - h, x + w + 1, y - h), fill=p[3])
+    d.line((x - w - 1, y + h, x + w + 1, y + h), fill=p[3])
+    d.point((x, y), fill=p[3])
+
+
+def _encre(d, x, y, s, k, p):  # éclaboussure : une tache, des gouttes projetées et une coulure
+    r = random.Random(k * 17 + s)
+    d.ellipse((x - s, y - s + 1, x + s, y + s - 1), fill=p[0])
+    d.ellipse((x - s + 1, y - s + 2, x + s - 2, y + s - 2), fill=p[1])
+    for _ in range(3 if s > 3 else 2):
+        a, dd, q = r.uniform(0, 2 * math.pi), s * r.uniform(1.3, 1.8), max(1, s // 4)
+        gx, gy = x + math.cos(a) * dd, y + math.sin(a) * dd
+        d.ellipse((gx - q, gy - q, gx + q, gy + q), fill=p[1])
+    dx = x + r.randint(-(s // 2), s // 2)
+    d.line((dx, y + s - 1, dx, y + s + 1 + s // 2), fill=p[1])
+    d.point((dx, y + s + 2 + s // 2), fill=p[1])
+    d.point((x - s // 2, y - s // 2 + 1), fill=p[3])
+
+
+def _gravite(d, x, y, s, k, p):  # astre dense cerclé d'un anneau, et la pesée vers le bas
+    c = max(1, s * 2 // 3)
+    d.ellipse((x - c, y - c, x + c, y + c), fill=p[0], outline=p[1])
+    tilt = k % 3 - 1
+    d.arc((x - s - 2, y - s // 2 + tilt, x + s + 2, y + s // 2 - tilt), 0, 360, fill=p[2])
+    d.point((x - c // 2, y - c // 2), fill=p[3])
+    v = y + s + 2
+    d.line([(x - s // 2 - 1, v), (x, v + s // 2 + 1), (x + s // 2 + 1, v)], fill=p[2])
+
+
+def _insecte(d, x, y, s, k, p):  # petite bête vue de dessus : ailes ouvertes ou repliées selon la variante, pattes
+    open_ = k % 2 == 0
+    ww, wh = (s, max(1, s // 2 + 1)) if open_ else (max(1, s // 2), s)
+    d.ellipse((x - ww - 1, y - s, x, y - s + 2 * wh), fill=p[2], outline=p[1])
+    d.ellipse((x, y - s, x + ww + 1, y - s + 2 * wh), fill=p[2], outline=p[1])
+    d.ellipse((x - max(1, s // 3), y - s // 2, x + max(1, s // 3), y + s), fill=p[0], outline=p[1])
+    for dy in (0, s // 2):
+        d.point((x - s // 2 - 1, y + dy), fill=p[1]); d.point((x + s // 2 + 1, y + dy), fill=p[1])
+    d.line((x - 1, y - s // 2, x - 2, y - s // 2 - 2), fill=p[1]); d.line((x + 1, y - s // 2, x + 2, y - s // 2 - 2), fill=p[1])
+    d.point((x, y), fill=p[3])
+
+
+def _fee(d, x, y, s, k, p):  # fleur à cinq pétales qui tourne d'une variante à l'autre, cœur clair
+    r, q = s * .75, max(1, s // 2)
+    for i in range(5):
+        a = math.radians(72 * i + 24 * (k % 3) - 90)
+        px, py = x + math.cos(a) * r, y + math.sin(a) * r
+        d.ellipse((px - q, py - q, px + q, py + q), fill=p[2], outline=p[1])
+    d.ellipse((x - max(1, s // 3), y - max(1, s // 3), x + max(1, s // 3), y + max(1, s // 3)), fill=p[3])
+
+
+def _son(d, x, y, s, k, p):  # croche et ondes : la note jaillit, ses ondes partent du côté opposé à la queue
+    sg = 1 if k % 2 else -1
+    hx, hy = x - sg * s // 2, y + s // 2
+    d.ellipse((hx - max(1, s // 2), hy - max(1, s // 3), hx + max(1, s // 2), hy + max(1, s // 3)), fill=p[2], outline=p[1])
+    sx = hx + sg * max(1, s // 2)
+    d.line((sx, hy, sx, y - s), fill=p[2])
+    d.line((sx, y - s, sx + sg * (s // 2 + 1), y - s // 2), fill=p[2])
+    rr = s // 2 + 2  # une seule onde, et seulement sur les grandes notes : à deux, les gestes denses devenaient illisibles
+    if s > 3:
+        a0 = 140 if sg > 0 else -40
+        d.arc((hx - rr, hy - rr, hx + rr, hy + rr), a0, a0 + 80, fill=p[3])
+    d.point((hx - sg, hy - 1), fill=p[3])
+
+
 MOTIF = {"feu": _feu, "eau": _eau, "plante": _plante, "vent": _vent, "roche": _roche, "glace": _glace,
          "foudre": _foudre, "lumière": _lumiere, "ombre": _ombre, "esprit": _esprit, "acier": _acier, "poison": _poison,
-         "insecte": _poison, "fée": _lumiere, "son": _vent}  # les trois derniers types reprennent un motif voisin (dard, éclat, souffle)
+         "insecte": _insecte, "fée": _fee, "son": _son, "temps": _temps, "encre": _encre, "gravité": _gravite}
 MOTIF = {e: (lambda f: lambda d, x, y, s, k, p: f(d, x, y, max(2, s), k, p))(f) for e, f in MOTIF.items()}  # 2 px au moins
 
 
