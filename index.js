@@ -23,6 +23,7 @@ const HTML = `<link rel="stylesheet" href="${U}ui/studio.css">
     <button class="nbs-tab" data-p="lab" title="Sprite Lab">${ic('lab')}Sprite Lab</button>
     <button class="nbs-tab" data-p="lib" title="Bibliothèque">${ic('biblio')}Bibliothèque</button>
     <button class="nbs-tab" data-p="eq" title="Équilibre">${ic('balance')}Équilibre</button>
+    <button class="nbs-tab" data-p="monde" title="Monde">${ic('monde')}Monde</button>
   </nav>
   <main class="nbs-frame">
     <section class="nbs-page" id="p-setup">
@@ -252,6 +253,30 @@ const HTML = `<link rel="stylesheet" href="${U}ui/studio.css">
       <div class="nbs-lib" id="lib"></div>
     </section>
 
+    <section class="nbs-page" id="p-monde">
+      <div class="nbs-cols nbs-wcols">
+        <div class="grow">
+          <div class="nbs-title">Carte du monde</div>
+          <div class="nbs-wmap" id="wMap"><canvas id="wCv"></canvas></div>
+          <div class="nbs-hint">Molette : zoom · glisser : déplacer · clic : ce qui vit à cet endroit</div>
+        </div>
+        <div class="nbs-wside">
+          <div class="nbs-title">Graine</div>
+          <div class="nbs-row"><div class="nbs-parch" style="flex:1"><input type="text" id="wSeed" maxlength="40" value="neo" spellcheck="false"></div><button class="nbs-btn dark" id="wDice" title="Nouvelle graine">${ic('de')}</button></div>
+          <div class="nbs-row nbs-wopt"><span class="nbs-hint">Taille</span><div class="nbs-parch"><select id="wSize"><option value="s">Petit</option><option value="m" selected>Moyen</option><option value="l">Grand</option></select></div></div>
+          <div class="nbs-row nbs-wopt"><span class="nbs-hint">Terres</span><div class="nbs-parch"><select id="wLand"><option value="0.3">Archipel</option><option value="0.42" selected>Équilibré</option><option value="0.58">Pangée</option></select></div></div>
+          <div class="nbs-row nbs-wopt"><span class="nbs-hint">Factions</span><div class="nbs-parch"><select id="wFac"><option>3</option><option>4</option><option selected>5</option><option>6</option><option>7</option><option>8</option></select></div></div>
+          <div class="nbs-row"><button class="nbs-btn go" id="wGen">${ic('monde')}Générer</button><button class="nbs-btn dark" id="wSave" title="Garder ce monde dans la liste">${ic('etoile')}Garder</button></div>
+          <div class="nbs-row"><button class="nbs-btn dark sm" id="wPng" title="La carte en image">${ic('exporter')}PNG</button><button class="nbs-btn dark sm" id="wJson" title="Terres, factions, villes, biomes et faune pour un jeu">${ic('exporter')}JSON</button></div>
+          <div class="nbs-title" style="margin-top:14px">Lieu</div>
+          <div id="wInfo"></div>
+          <div class="nbs-title" style="margin-top:14px">Factions</div>
+          <div id="wFacs"></div>
+          <div class="nbs-title" style="margin-top:14px">Mondes gardés</div>
+          <div id="wSaved"></div>
+        </div>
+      </div>
+    </section>
     <section class="nbs-page" id="p-eq">
       <div id="eq"><div class="nbs-hint">Lecture du bestiaire…</div></div>
     </section>
@@ -328,6 +353,7 @@ export default async function (ctx) {
     if (p === 'lib') loadLib();
     if (p === 'eq') loadBalance();
     if (p === 'lab') loadFrame();
+    if (p === 'monde') loadWorld();
   };
   $$('.nbs-tab').forEach(t => t.onclick = () => show(t.dataset.p));
 
@@ -1324,6 +1350,305 @@ export default async function (ctx) {
       catch (e) { b.disabled = false; say(e.message, true); }
     });
   }
+
+  // ------------------------------------------------------------ monde : un continent tiré d'une graine (relief, climat, rivières, villes, factions)
+  // Tout est calculé ici, sans le moteur ni la carte graphique : la même graine redonne toujours le même monde.
+  const BIOMES = [
+    ['abysses', 'Abysses', 22, 40, 84], ['ocean', 'Océan', 34, 68, 122], ['cote', 'Eaux côtières', 47, 127, 168],
+    ['plage', 'Plage', 233, 207, 140], ['desert', 'Désert', 216, 180, 104], ['savane', 'Savane', 176, 170, 76],
+    ['plaine', 'Plaine', 94, 174, 78], ['foret', 'Forêt', 43, 106, 58], ['jungle', 'Jungle', 29, 84, 44],
+    ['marais', 'Marais', 70, 92, 64], ['taiga', 'Taïga', 52, 90, 80], ['toundra', 'Toundra', 143, 151, 128],
+    ['neige', 'Neiges éternelles', 236, 240, 244], ['montagne', 'Montagne', 118, 104, 96], ['volcan', 'Volcan', 138, 38, 51],
+  ];
+  const BI = Object.fromEntries(BIOMES.map((b, i) => [b[0], i]));
+  // où vit chaque type de créature du Studio
+  const HABITAT = {
+    feu: ['desert', 'volcan', 'savane'], eau: ['ocean', 'cote', 'marais'], plante: ['foret', 'jungle', 'plaine'], vent: ['montagne', 'plaine', 'toundra'],
+    roche: ['montagne', 'desert'], glace: ['neige', 'toundra', 'taiga'], foudre: ['montagne', 'savane'], 'lumière': ['plaine', 'desert', 'plage'],
+    ombre: ['taiga', 'marais', 'abysses'], esprit: ['foret', 'marais'], acier: ['montagne'], poison: ['marais', 'jungle'], insecte: ['jungle', 'foret', 'savane'],
+    'fée': ['foret', 'plaine'], son: ['plaine', 'montagne'], temps: ['desert', 'toundra'], encre: ['abysses', 'ocean'], 'gravité': ['montagne', 'volcan'],
+  };
+  const FAC_COL = [[224, 82, 92], [242, 194, 91], [185, 142, 224], [125, 255, 176], [122, 215, 240], [233, 140, 60], [255, 244, 220], [160, 90, 200]];
+  const CULTURES = [
+    [['kar', 'dor', 'mag', 'thal', 'gor', 'vel', 'bran', 'ruk', 'zar', 'mor', 'hal', 'grim'], ['heim', 'gard', 'dun', 'rok', 'grad', 'holm']],
+    [['li', 'sa', 'el', 'ia', 'mi', 'ra', 'na', 'lo', 'vae', 'syl', 'ae', 'thi'], ['dell', 'wen', 'lys', 'mire', 'vale', 'rien']],
+    [['ba', 'ku', 'ta', 'ze', 'qa', 'ri', 'sha', 'du', 'ma', 'ji', 'su', 'ka'], ['bad', 'kesh', 'dar', 'tum', 'ra', 'zan']],
+    [['mo', 'ver', 'bel', 'cor', 'fon', 'sau', 'mar', 'lan', 'bru', 'val', 'ro', 'pel'], ['mont', 'ville', 'bourg', 'court', 'lac', 'roc']],
+  ];
+  const TITRES = ['Royaume de ', 'Empire de ', 'Ligue de ', 'Clans de ', 'Théocratie de ', 'République de ', 'Horde de ', 'Principauté de '];
+  const TAILLES = { s: [160, 100], m: [240, 150], l: [320, 200] };
+
+  const seedOf = s => { let h = 2166136261; for (const ch of String(s)) h = Math.imul(h ^ ch.codePointAt(0), 16777619); return h >>> 0; };
+  const mulberry = a => () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  const noise = seed => {
+    const v = (x, y) => { let h = Math.imul(x, 374761393) + Math.imul(y, 668265263) + seed | 0; h = Math.imul(h ^ h >>> 13, 1274126177); return ((h ^ h >>> 16) >>> 0) / 4294967296; };
+    const sm = t => t * t * (3 - 2 * t);
+    return (x, y) => {
+      const xi = Math.floor(x), yi = Math.floor(y), fx = sm(x - xi), fy = sm(y - yi), a = v(xi, yi), b = v(xi + 1, yi), c = v(xi, yi + 1), d = v(xi + 1, yi + 1);
+      return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+    };
+  };
+  const fbm = (n, x, y, oct) => { let s = 0, a = 1, t = 0; for (let i = 0; i < oct; i++) { s += a * n(x, y); t += a; x *= 2.03; y *= 2.03; a /= 2; } return s / t; };
+  const nameIn = (r, cult) => {
+    const [syl, end] = CULTURES[cult]; let s = syl[r() * syl.length | 0] + syl[r() * syl.length | 0];
+    if (r() < .5) s += end[r() * end.length | 0]; else if (r() < .3) s += syl[r() * syl.length | 0];
+    return s[0].toUpperCase() + s.slice(1);
+  };
+
+  function makeWorld(o) {
+    const [W, H] = TAILLES[o.taille] || TAILLES.m, N = W * H, seed = seedOf(o.graine), r = mulberry(seed);
+    const nh = noise(seed), nm = noise(seed ^ 0x9e3779b9), nt = noise(seed ^ 0x85ebca6b), nv = noise(seed ^ 0xc2b2ae35);
+    const e = new Float32Array(N), f = (+o.terres < .35 ? 6 : +o.terres > .5 ? 2.6 : 3.2) / W;  // un archipel : un relief plus fin, donc plus d'îles
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const dx = 2 * x / W - 1, dy = 2 * y / H - 1, edge = 1 - (1 - dx * dx) * (1 - dy * dy);  // les bords de la carte plongent dans l'océan
+      e[y * W + x] = fbm(nh, x * f, y * f, 6) - edge * .45;
+    }
+    const sorted = Float32Array.from(e).sort(), sea = sorted[Math.floor(N * (1 - (+o.terres || .42)))], lo = sorted[0], hi = sorted[N - 1];
+    const land = new Uint8Array(N), h = new Float32Array(N), biome = new Uint8Array(N), river = new Uint8Array(N), temp = new Float32Array(N), wet = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const x = i % W, y = i / W | 0;
+      land[i] = e[i] > sea ? 1 : 0;
+      h[i] = land[i] ? (e[i] - sea) / (hi - sea) : -(sea - e[i]) / (sea - lo);
+      temp[i] = 1 - Math.abs(y / H - .5) * 1.5 - Math.max(0, h[i]) * .45 + (fbm(nt, x * f * 2, y * f * 2, 3) - .5) * .35;
+      wet[i] = Math.min(1, Math.max(0, (fbm(nm, x * f * 1.6, y * f * 1.6, 4) - .5) * 2 + .5));
+    }
+    const pick = (i) => {
+      const t = temp[i], m = wet[i], hh = h[i];
+      if (!land[i]) return hh < -.45 ? BI.abysses : hh < -.12 ? BI.ocean : BI.cote;
+      if (hh > .68 && fbm(nv, (i % W) * f * 6, (i / W | 0) * f * 6, 2) > .7) return BI.volcan;
+      if (hh > .66) return t < .3 ? BI.neige : BI.montagne;
+      if (t < .12) return BI.neige;
+      if (hh < .035 && t > .3) return BI.plage;
+      if (hh < .14 && m > .72) return BI.marais;
+      if (t < .3) return BI.toundra;
+      if (t < .45) return m > .45 ? BI.taiga : BI.toundra;
+      if (t < .68) return m < .42 ? BI.plaine : BI.foret;
+      return m < .35 ? BI.desert : m < .52 ? BI.savane : BI.jungle;
+    };
+    for (let i = 0; i < N; i++) biome[i] = pick(i);
+    const nb4 = i => { const x = i % W, out = []; if (x > 0) out.push(i - 1); if (x < W - 1) out.push(i + 1); if (i >= W) out.push(i - W); if (i < N - W) out.push(i + W); return out; };
+    const nb8 = i => { const x = i % W, y = i / W | 0, out = []; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if ((dx || dy) && x + dx >= 0 && x + dx < W && y + dy >= 0 && y + dy < H) out.push(i + dy * W + dx); return out; };
+
+    // rivières : d'une source en hauteur, toujours vers la case voisine la plus basse, jusqu'à la mer (ou un lac dans un creux)
+    const nRiv = Math.round(N / 2200);
+    for (let k = 0, tries = 0; k < nRiv && tries < nRiv * 40; tries++) {
+      let i = r() * N | 0;
+      if (!land[i] || h[i] < .4 || wet[i] < .35 || river[i] || biome[i] === BI.neige) continue;
+      const path = [i];
+      for (let step = 0; step < W + H; step++) {
+        let best = -1, be = e[i];
+        for (const j of nb8(i)) if (e[j] < be) { be = e[j]; best = j; }
+        if (best < 0) { land[i] = 0; h[i] = -.05; biome[i] = BI.cote; break; }  // un creux : un petit lac
+        i = best; if (!land[i] || river[i]) break;
+        path.push(i);
+      }
+      if (path.length < 6) continue;
+      for (const j of path) if (land[j]) river[j] = 1;
+      k++;
+    }
+
+    // terres : chaque masse de terre d'un seul tenant a un nom (continent ou île)
+    const mass = new Int32Array(N).fill(-1), masses = [];
+    for (let i = 0; i < N; i++) if (land[i] && mass[i] < 0) {
+      const id = masses.length, q = [i]; mass[i] = id; let n = 0;
+      while (q.length) { const c = q.pop(); n++; for (const j of nb4(c)) if (land[j] && mass[j] < 0) { mass[j] = id; q.push(j); } }
+      masses.push({ id, taille: n });
+    }
+    const landN = masses.reduce((s, m) => s + m.taille, 0);
+    for (const m of masses) { m.genre = m.taille >= landN * .08 ? 'continent' : m.taille >= 12 ? 'île' : 'îlot'; m.nom = nameIn(r, r() * 4 | 0); }
+
+    // villes : près de l'eau et des rivières, loin des montagnes, jamais trop serrées
+    const coast = i => nb4(i).some(j => !land[j]);
+    const score = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const b = BIOMES[biome[i]][0];
+      if (!land[i] || ['montagne', 'neige', 'volcan', 'marais'].includes(b)) { score[i] = -1; continue; }
+      score[i] = 1 + river[i] * 2 + (coast(i) ? 1.5 : 0) + (['plaine', 'foret', 'savane'].includes(b) ? 1 : 0) - (['desert', 'toundra'].includes(b) ? 1 : 0) + r() * 1.5;
+    }
+    const minD = W / 13, want = Math.round(N / 1500), order = [...score.keys()].filter(i => score[i] > 0).sort((a, b) => score[b] - score[a]), villes = [];
+    for (const i of order) {
+      if (villes.length >= want) break;
+      const x = i % W, y = i / W | 0;
+      if (villes.every(v => Math.hypot(v.x - x, v.y - y) >= minD)) villes.push({ x, y, i, score: score[i] });
+    }
+
+    // factions : des capitales aussi éloignées que possible, puis chaque terre va à la capitale la plus proche à pied
+    const K = Math.min(+o.factions || 5, villes.length), caps = [];
+    if (K) caps.push(0);
+    while (caps.length < K) {
+      let best = -1, bd = -1;
+      villes.forEach((v, n) => { if (caps.includes(n)) return; const d = Math.min(...caps.map(c => Math.hypot(villes[c].x - v.x, villes[c].y - v.y))); if (d > bd) { bd = d; best = n; } });
+      caps.push(best);
+    }
+    const owner = new Int8Array(N).fill(-1), cost = new Float64Array(N).fill(Infinity), heap = [];
+    const push = (c, i) => { heap.push([c, i]); let k = heap.length - 1; while (k) { const p = k - 1 >> 1; if (heap[p][0] <= heap[k][0]) break; [heap[p], heap[k]] = [heap[k], heap[p]]; k = p; } };
+    const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let k = 0; for (;;) { const a = 2 * k + 1, b = a + 1; let m = k; if (a < heap.length && heap[a][0] < heap[m][0]) m = a; if (b < heap.length && heap[b][0] < heap[m][0]) m = b; if (m === k) break; [heap[m], heap[k]] = [heap[k], heap[m]]; k = m; } } return top; };
+    const STEP = { montagne: 4, neige: 5, volcan: 6, marais: 2, foret: 1.5, jungle: 2, desert: 1.6, cote: 5 };
+    caps.forEach((n, f) => { const i = villes[n].i; owner[i] = f; cost[i] = 0; push(0, i); });
+    const reach = W * .55;
+    while (heap.length) {
+      const [c, i] = pop();
+      if (c > cost[i]) continue;
+      for (const j of nb4(i)) {
+        const b = BIOMES[biome[j]][0];
+        if (!land[j] && b !== 'cote') continue;  // la mer profonde arrête les conquêtes, pas les détroits
+        const nc = c + (STEP[b] || 1) + river[j];
+        if (nc < cost[j] && nc < reach) { cost[j] = nc; owner[j] = owner[i]; push(nc, j); }
+      }
+    }
+    for (let i = 0; i < N; i++) if (!land[i]) owner[i] = -1;
+    const cult = caps.map(() => r() * 4 | 0);
+    for (const v of villes) { v.faction = owner[v.i]; v.nom = nameIn(r, v.faction >= 0 ? cult[v.faction] : r() * 4 | 0); v.capitale = false; }
+    const factions = caps.map((n, f) => {
+      const v = villes[n]; v.capitale = true;
+      let terres = 0; for (let i = 0; i < N; i++) if (owner[i] === f) terres++;
+      return { id: f, nom: TITRES[r() * TITRES.length | 0] + v.nom, capitale: v.nom, couleur: FAC_COL[f % FAC_COL.length], terres, villes: villes.filter(x => x.faction === f).length };
+    });
+    return { W, H, o, e, h, land, biome, river, mass, masses, villes, factions, owner };
+  }
+
+  // l'image de la carte, une case = un pixel ; les villes sont posées par-dessus à l'échelle de l'écran
+  function worldImage(w) {
+    const { W, H, h, land, biome, river, owner, factions } = w, img = new ImageData(W, H), d = img.data;
+    for (let i = 0; i < W * H; i++) {
+      const b = BIOMES[biome[i]], x = i % W;
+      let [R, G, B] = [b[2], b[3], b[4]];
+      if (river[i]) [R, G, B] = [79, 160, 220];
+      const up = i >= W + 1 ? h[i - W - 1] : h[i], k = h[i] > 0 ? (h[i] > up + .01 ? 1.12 : h[i] < up - .01 ? .86 : 1) : 1 + Math.round(h[i] * 3) * .06;  // ombrage en 3 tons
+      R *= k; G *= k; B *= k;
+      const f = owner[i];
+      if (f >= 0) {
+        const c = factions[f].couleur, edge = [x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1, i - W, i + W].some(j => j >= 0 && j < W * H && land[j] && owner[j] !== f);
+        if (edge) [R, G, B] = c.map(v => v * .75); else { R = R * .85 + c[0] * .15; G = G * .85 + c[1] * .15; B = B * .85 + c[2] * .15; }
+      }
+      d.set([R, G, B, 255], i * 4);
+    }
+    return img;
+  }
+
+  function drawCities(g, w, z, ox, oy, labels) {
+    g.font = '16px Grimoire, monospace'; g.textBaseline = 'bottom';
+    const used = [];  // un nom qui en chevaucherait un autre n'est pas écrit (il reste au zoom suivant ou au clic)
+    for (const v of w.villes.slice().sort((a, b) => b.capitale - a.capitale)) {
+      const s = v.capitale ? Math.max(5, z + 2) : Math.max(3, z), x = Math.round(ox + (v.x + .5) * z - s / 2), y = Math.round(oy + (v.y + .5) * z - s / 2);
+      g.fillStyle = '#0d0a14'; g.fillRect(x - 1, y - 1, s + 2, s + 2);
+      g.fillStyle = v.capitale ? '#f2c25b' : '#fff4dc'; g.fillRect(x, y, s, s);
+      if (labels && (v.capitale || z >= 4)) {
+        const tx = x + s + 3, ty = y + s / 2 + 8, tw = g.measureText(v.nom).width + 2, box = [tx, ty - 18, tx + tw, ty + 2];
+        if (used.some(u => box[0] < u[2] && u[0] < box[2] && box[1] < u[3] && u[1] < box[3])) continue;
+        used.push(box);
+        g.fillStyle = '#0d0a14'; g.fillText(v.nom, tx + 2, ty + 2);
+        g.fillStyle = v.capitale ? '#f2c25b' : '#fff4dc'; g.fillText(v.nom, tx, ty);
+      }
+    }
+  }
+
+  const habitants = (lib, bi) => lib.filter(c => String(typeOf(c)).toLowerCase().split(/\s+et\s+|,\s*|\s*\/\s*/).some(t => (HABITAT[t.trim()] || []).includes(bi)));
+
+  const W8 = { world: null, img: null, base: null, z: 2, ox: 0, oy: 0, lib: [] };
+  const savedWorlds = () => { try { return JSON.parse(localStorage.getItem('nbs-mondes') || '[]'); } catch { return []; } };
+  const keepWorlds = l => { try { localStorage.setItem('nbs-mondes', JSON.stringify(l.slice(0, 30))); } catch {} };
+  const wOpts = () => ({ graine: $('#wSeed').value.trim() || 'neo', taille: $('#wSize').value, terres: $('#wLand').value, factions: $('#wFac').value });
+
+  function wDraw() {
+    const cv = $('#wCv'), box = $('#wMap'); if (!W8.world || !box.clientWidth) return;
+    cv.width = box.clientWidth; cv.height = box.clientHeight;
+    const g = cv.getContext('2d'); g.imageSmoothingEnabled = false;
+    g.fillStyle = '#16284f'; g.fillRect(0, 0, cv.width, cv.height);
+    g.drawImage(W8.base, W8.ox, W8.oy, W8.world.W * W8.z, W8.world.H * W8.z);
+    drawCities(g, W8.world, W8.z, W8.ox, W8.oy, W8.z >= 2);
+  }
+  function wFit() {
+    const box = $('#wMap'), w = W8.world;
+    W8.z = Math.max(1, Math.floor(Math.min(box.clientWidth / w.W, box.clientHeight / w.H)));
+    W8.ox = Math.round((box.clientWidth - w.W * W8.z) / 2); W8.oy = Math.round((box.clientHeight - w.H * W8.z) / 2);
+  }
+  function wBuild(o) {
+    const w = makeWorld(o);
+    W8.world = w; W8.img = worldImage(w);
+    W8.base = Object.assign(document.createElement('canvas'), { width: w.W, height: w.H }); W8.base.getContext('2d').putImageData(W8.img, 0, 0);
+    $('#wSeed').value = o.graine; $('#wSize').value = o.taille; $('#wLand').value = o.terres; $('#wFac').value = o.factions;
+    $('#wFacs').innerHTML = w.factions.map(f => `<div class="nbs-wfac"><i style="background:rgb(${f.couleur})"></i><b>${esc(f.nom)}</b><span class="nbs-hint">${f.villes} villes · ${f.terres} cases</span></div>`).join('')
+      + `<div class="nbs-hint">${w.masses.filter(m => m.genre === 'continent').map(m => esc(m.nom)).join(', ')}</div>`;
+    $('#wInfo').innerHTML = '<div class="nbs-hint">Clique sur la carte.</div>';
+    wFit(); wDraw();
+  }
+  function wInfo(tx, ty) {
+    const w = W8.world, i = ty * w.W + tx, b = BIOMES[w.biome[i]], m = w.masses[w.mass[i]], f = w.factions[w.owner[i]];
+    const near = w.villes.slice().sort((a, c) => Math.hypot(a.x - tx, a.y - ty) - Math.hypot(c.x - tx, c.y - ty))[0];
+    const fauna = habitants(W8.lib, b[0]).slice(0, 12);
+    $('#wInfo').innerHTML = `<div><b>${esc(b[1])}</b>${w.river[i] ? ' · rivière' : ''}${w.land[i] ? ` · altitude ${Math.round(w.h[i] * 3000)} m` : ''}</div>
+      ${m ? `<div class="nbs-hint">${m.genre === 'continent' ? 'Continent' : m.genre === 'île' ? 'Île' : 'Îlot'} : ${esc(m.nom)}</div>` : ''}
+      <div class="nbs-hint">${f ? esc(f.nom) : w.land[i] ? 'Terres sauvages' : 'Eaux libres'}</div>
+      ${near ? `<div class="nbs-hint">Ville la plus proche : ${esc(near.nom)}${near.capitale ? ' (capitale)' : ''}</div>` : ''}
+      <div class="nbs-title" style="margin-top:8px">Faune</div>
+      ${fauna.length ? `<div class="nbs-wfauna">${fauna.map(c => `<img src="${U}lib/${encodeURIComponent(c.slug)}/sprites/bas_repos.png" title="${esc(nameOf(c))}" alt="">`).join('')}</div>`
+        : '<div class="nbs-hint">Aucune créature de ta bibliothèque ne vit ici.</div>'}`;
+  }
+  function wExport() {
+    const w = W8.world, z = 4, cv = Object.assign(document.createElement('canvas'), { width: w.W * z, height: w.H * z }), g = cv.getContext('2d');
+    g.imageSmoothingEnabled = false; g.drawImage(W8.base, 0, 0, cv.width, cv.height); drawCities(g, w, z, 0, 0, true);
+    return cv;
+  }
+  const wDownload = (blob, name) => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); };
+  function wJson() {
+    const w = W8.world, count = {};
+    for (const b of w.biome) count[BIOMES[b][0]] = (count[BIOMES[b][0]] || 0) + 1;
+    return {
+      graine: w.o.graine, reglages: w.o, largeur: w.W, hauteur: w.H,
+      terres: w.masses.filter(m => m.genre !== 'îlot').map(({ nom, genre, taille }) => ({ nom, genre, taille })),
+      factions: w.factions.map(({ nom, capitale, couleur, terres, villes }) => ({ nom, capitale, couleur: '#' + couleur.map(v => v.toString(16).padStart(2, '0')).join(''), terres, villes })),
+      villes: w.villes.map(v => ({ nom: v.nom, x: v.x, y: v.y, capitale: v.capitale, faction: w.factions[v.faction]?.nom || null, biome: BIOMES[w.biome[v.i]][1] })),
+      biomes: Object.fromEntries(Object.entries(count).map(([k, n]) => [k, { nom: BIOMES[BI[k]][1], cases: n, faune: habitants(W8.lib, k).map(c => nameOf(c)) }])),
+      cases: Array.from(w.biome, b => BIOMES[b][0][0]).join(''),  // une lettre par case, ligne par ligne
+    };
+  }
+  function wSavedList() {
+    const l = savedWorlds();
+    $('#wSaved').innerHTML = l.length ? l.map((s, n) => `<div class="nbs-wsave"><button class="nbs-btn dark sm" data-wo="${n}">${esc(s.nom)}</button><span class="nbs-hint">${esc(s.graine)}</span><button class="nbs-btn red sm" data-wx="${n}" title="Oublier ce monde">✕</button></div>`).join('')
+      : '<div class="nbs-hint">Aucun monde enregistré.</div>';
+    $$('#wSaved [data-wo]').forEach(b => b.onclick = () => wBuild(l[b.dataset.wo]));
+    $$('#wSaved [data-wx]').forEach(b => b.onclick = () => { l.splice(b.dataset.wx, 1); keepWorlds(l); wSavedList(); });
+  }
+  async function loadWorld() {
+    try { W8.lib = await get('/items?kind=creature'); } catch { W8.lib = []; }
+    if (!W8.world) wBuild(wOpts()); else wDraw();
+    wSavedList();
+  }
+  $('#wGen').onclick = () => wBuild(wOpts());
+  $('#wDice').onclick = () => { $('#wSeed').value = nameIn(Math.random, Math.random() * 4 | 0).toLowerCase() + '-' + (Math.random() * 1000 | 0); wBuild(wOpts()); };
+  $('#wSeed').onkeydown = ev => { if (ev.key === 'Enter') wBuild(wOpts()); };
+  $('#wSave').onclick = () => {
+    const w = W8.world, cont = w.masses.slice().sort((a, b) => b.taille - a.taille)[0], l = savedWorlds().filter(s => s.graine !== w.o.graine || s.taille !== w.o.taille);
+    l.unshift({ ...w.o, nom: cont ? cont.nom : w.o.graine, t: Date.now() }); keepWorlds(l); wSavedList();
+  };
+  $('#wPng').onclick = () => wExport().toBlob(b => wDownload(b, 'monde-' + W8.world.o.graine + '.png'));
+  $('#wJson').onclick = () => wDownload(new Blob([JSON.stringify(wJson(), null, 1)], { type: 'application/json' }), 'monde-' + W8.world.o.graine + '.json');
+  {
+    const cv = $('#wCv'); let drag = null;
+    cv.onwheel = ev => {
+      ev.preventDefault(); if (!W8.world) return;
+      const rc = cv.getBoundingClientRect(), mx = ev.clientX - rc.left, my = ev.clientY - rc.top, z0 = W8.z, z = Math.min(16, Math.max(1, z0 + (ev.deltaY < 0 ? 1 : -1)));
+      if (z === z0) return;
+      W8.ox = Math.round(mx - (mx - W8.ox) * z / z0); W8.oy = Math.round(my - (my - W8.oy) * z / z0); W8.z = z; wDraw();
+    };
+    cv.onpointerdown = ev => { drag = { x: ev.clientX, y: ev.clientY, ox: W8.ox, oy: W8.oy, moved: false }; cv.setPointerCapture(ev.pointerId); };
+    cv.onpointermove = ev => {
+      if (!drag) return;
+      const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+      if (drag.moved) { W8.ox = drag.ox + dx; W8.oy = drag.oy + dy; wDraw(); }
+    };
+    cv.onpointerup = ev => {
+      if (drag && !drag.moved && W8.world) {
+        const rc = cv.getBoundingClientRect(), tx = Math.floor((ev.clientX - rc.left - W8.ox) / W8.z), ty = Math.floor((ev.clientY - rc.top - W8.oy) / W8.z);
+        if (tx >= 0 && ty >= 0 && tx < W8.world.W && ty < W8.world.H) wInfo(tx, ty);
+      }
+      drag = null;
+    };
+    new ResizeObserver(() => { if (S.tab === 'monde') wDraw(); }).observe($('#wMap'));
+  }
+  $('.nbs').__monde = { makeWorld, worldImage, habitants, wJson: () => wJson(), wBuild, W8 };
 
   // ------------------------------------------------------------ démarrage
   renderSheet();

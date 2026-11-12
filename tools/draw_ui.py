@@ -624,6 +624,25 @@ ICONS["de"] = outline(grid([      # dé : nouvelle graine
     "................",
 ]))
 
+ICONS["monde"] = outline(grid([   # globe : le monde
+    "................",
+    "................",
+    ".....EEEEEE.....",
+    "...EEe33eeeEE...",
+    "..Ee334333eeeE..",
+    "..Ee3343eeee3E..",
+    ".Eee333eeee334E.",
+    ".Eeee3eeeee343E.",
+    ".Eeeeeee3e3333E.",
+    ".Eeee33ee33e3eE.",
+    "..Eee343eeeeeE..",
+    "..Eeee33eeeeeE..",
+    "...EEee3eeeEE...",
+    ".....EEEEEE.....",
+    "................",
+    "................",
+]))
+
 ICONS["grille"] = grid([
     "................",
     ".kkkkkkkkkkkkkk.",

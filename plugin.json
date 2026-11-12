@@ -1,9 +1,9 @@
 {
   "id": "neodex.bestiarystudio",
   "name": "NeoBestiary Studio",
-  "version": "1.8.5",
+  "version": "1.9.0",
   "author": "NDesumeur",
-  "description": "Décris une créature en français : l'IA dessine 3 esquisses, tu choisis, et elle sort en personnage de jeu 64×64 dans les 4 directions avec une marche en 5 images, une fiche de bestiaire (types, rareté, statistiques, 2 à 4 attaques animées) et un portrait de combat. Crée aussi des objets, des attaques et des musiques. Tout tourne en local sur ton PC (ComfyUI, carte NVIDIA 8 Go), modèles installés automatiquement.",
+  "description": "Décris une créature en français : l'IA dessine 3 esquisses, tu choisis, et elle sort en personnage de jeu 64×64 dans les 4 directions avec une marche en 5 images, une fiche de bestiaire (types, rareté, statistiques, 2 à 4 attaques animées) et un portrait de combat. Crée aussi des objets, des attaques, des musiques et des mondes entiers (continents, rivières, villes, factions) où vivent tes créatures. Tout tourne en local sur ton PC (ComfyUI, carte NVIDIA 8 Go), modèles installés automatiquement.",
   "icon": "icon.png",
   "entry": "index.js",
   "view": "bestiarystudio",
