@@ -124,6 +124,7 @@ _started = [0.0]
 def _tags():
     """La liste des modèles d'Ollama. Ollama installé mais arrêté (fermé, pas lancé avec Windows) : démarré en fond, puis
     attendu jusqu'à 30 s ; occupé à charger un modèle : on lui laisse 15 s au lieu de 3 pour répondre."""
+    import os
     import subprocess
     import time
     try:
@@ -134,8 +135,9 @@ def _tags():
             raise
         if time.time() - _started[0] > 60:  # au plus un lancement par minute
             _started[0] = time.time()
+            # started from the user's folder: Ollama keeps running after Studio, and from the plugin's folder it would lock it (no update nor uninstall)
             subprocess.Popen([exe, "serve"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                             cwd=os.path.expanduser("~"), creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         end = time.time() + 30
         while True:
             time.sleep(1)

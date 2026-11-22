@@ -3,8 +3,9 @@ module.exports = async ({ pj, js, sleep }) => {
   const run = async c => { try { return await pj(c); } catch (e) { if (/pas de cadre/.test(e.message)) return js(c); throw e; } };
   const M = `document.querySelector('.nbs').__monde`;
   const eq = async (code, want, what) => { const got = await run(code); if (JSON.stringify(got) !== JSON.stringify(want)) throw new Error(what + ' : ' + JSON.stringify(got)); };
-  await sleep(300);
-  await run(`(document.querySelector('.nbs-tab[data-p=monde]').click(), 0)`); await sleep(800);
+  for (let i = 0; i < 30 && !await run(`!!document.querySelector('.nbs-tab[data-p=monde]')`); i++) await sleep(300);
+  await run(`(document.querySelector('.nbs-tab[data-p=monde]').click(), 0)`);
+  for (let i = 0; i < 30 && !await run(`!!${M}?.W8?.world`); i++) await sleep(300);
   await eq(`!!${M}.W8.world && document.querySelector('#wCv').width > 100`, true, 'carte dessinée');
   // la même graine redonne le même monde, une autre graine un autre
   const o = `{ graine: 'essai', taille: 's', terres: '0.42', factions: '4' }`;
@@ -21,5 +22,13 @@ module.exports = async ({ pj, js, sleep }) => {
     c.dispatchEvent(new PointerEvent('pointerdown', { clientX: x, clientY: y, pointerId: 1, bubbles: true })); c.dispatchEvent(new PointerEvent('pointerup', { clientX: x, clientY: y, pointerId: 1, bubbles: true })); return 0; })()`);
   await sleep(200);
   await eq(`/Faune/.test(document.querySelector('#wInfo').textContent)`, true, 'infos du lieu');
-  return 'monde : graine stable, factions, archipel, faune par biome, export JSON, clic sur la carte ok';
+  // la file de nuit et la palette commune sont à leur place (le moteur n'est pas lancé ici : rien n'est invoqué)
+  await eq(`['#queue', '#night', '#palRef', '#palClear', '.nbs-opt[data-o=shared_palette]'].every(s => !!document.querySelector(s))`, true, 'file de nuit et palette commune');
+  await run(`(() => { const q = document.querySelector('#queue'); q.value = 'Ophidrache : un serpent' + String.fromCharCode(10) + 'Braisou : un renard'; q.dispatchEvent(new Event('input')); return 0; })()`);
+  await eq(`document.querySelector('#queueN').textContent`, '2 créatures dans la file', 'compte de la file');
+  // la page Contrôle s'ouvre (sans moteur : elle dit qu'elle cherche, ou l'erreur, mais pas une page vide)
+  await run(`(document.querySelector('.nbs-tab[data-p=ctrl]').click(), 0)`);
+  await sleep(300);
+  await eq(`document.querySelector('#p-ctrl').classList.contains('on') && document.querySelector('#ctrl').textContent.trim().length > 0`, true, 'page Contrôle');
+  return 'contrôle, file de nuit, palette commune · ' + 'monde : graine stable, factions, archipel, faune par biome, export JSON, clic sur la carte ok';
 };

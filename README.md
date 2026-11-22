@@ -76,3 +76,27 @@ Rien n'est synchronisé : les créatures, les modèles et les images restent sur
 ## Installer
 
 Dans NeoDex : **NeoStore → À découvrir → NeoBestiary Studio → Installer**.
+
+## La file de nuit
+
+Dans Créer, écris tes créatures dans « File de nuit », une par ligne : « Nom : description ». « [feu] » au début de la ligne choisit le type. « Lancer la file » les invoque l'une après l'autre (esquisses, la meilleure choisie toute seule, toute la créature), puis s'arrête quand la file est vide. La file reste gardée si tu fermes le Studio ; chaque créature faite en sort.
+
+## La palette commune
+
+Dans le Sprite Lab, « Prendre comme référence » ajoute les couleurs d'une créature que tu aimes à la palette commune (3 créatures au plus). Coche « Palette commune » sur une autre créature : ses 20 images prennent ces couleurs, pour un bestiaire au style cohérent. « × » l'oublie.
+
+## Des créatures qui bougent vraiment
+
+En attaquant, la créature prend son élan, s'incline depuis les pieds et, pour une attaque au contact (charge, corne, morsure, griffe…), bondit vers la cible avant de revenir ; elle se tasse puis s'étire. En marchant, les créatures à pattes font de vrais pas : chaque patte entière pivote depuis la hanche et le pied se lève, au lieu des pieds qui glissaient et se déchiraient ; une queue ou un ventre posé au sol ne bouge plus comme une patte. Les créatures qui flottent ne sont plus figées : leurs tentacules, racines ou voiles se balancent. Au premier lancement, les attaques et la marche des créatures déjà faites sont refaites une fois (l'ancienne marche reste avec ◀ ▶).
+
+Chaque espèce a sa démarche, lue dans sa fiche : un félin glisse à grands pas souples, un insecte trottine vite, un oiseau sautille en hochant la tête, un reptile se dandine, une très grande ou très lourde créature avance lentement en tanguant. Le corps suit le pas : la tête hoche, la queue se balance, les ailes battent, une crinière ou des antennes traînent un peu derrière, et plusieurs têtes bougent chacune à leur rythme. Les serpents, vers et poissons ont une vraie vague qui voyage le long du corps, de la queue vers la tête.
+
+Chaque genre d'attaque a son geste, dans les quatre directions (une griffe fauche, une morsure plonge, un fouet fait tourner le corps…). Le nom compte : « Griffe de Vent » est un coup de griffes, et un geste qui demande une queue, une corne ou des ailes n'est donné qu'à une créature qui les a. Les effets prennent la couleur de la créature et changent un peu d'une attaque à l'autre ; les éléments sombres ont un contour clair pour rester lisibles. Le contour de la créature reste le même dans toutes les images.
+
+Dans Directions, chaque attaque se joue aussi « comme dans l'Arène » : la créature frappe une cible qui recule, blanchit et tremble ; un clic fait entendre son son.
+
+**Contrôle** : un onglet où chaque créature marche, avec une note de 1 à 5 et ce qui cloche (pattes introuvables, miettes de pixels, contour cassé, tailles ou couleurs qui changent selon la direction, attaque dont le nom annonce un autre geste, statistiques qui ne collent pas au corps). **Refaire** la reprend sans carte graphique ; **Ouvrir** l'ouvre dans Directions. La note se voit aussi sur les cartes de la bibliothèque. À la création, si la vue de profil a un gros défaut, elle est refaite une fois toute seule et la meilleure est gardée.
+
+**Redessiner** (Contrôle) : les vues que seul un nouveau dessin peut corriger sont refaites avec la carte graphique, une créature après l'autre, ou toutes d'un coup : un profil aux pattes collées (redessiné pattes bien écartées), un profil dessiné avec une mauvaise posture, une vue qui change de taille ou de couleurs (le profil ou le dos, celle qui détonne). La nouvelle vue n'est gardée que si la note ne baisse pas ; l'ancienne reste dans les versions.
+
+Une fiche qui disait « rampante » pour une créature à quatre pattes (ou plus) la croyait couchée à plat : la posture suit maintenant les pattes de la description. Les attaques dont le nom annonce un geste le gardent toujours (« Cri de Yaga » reste un cri, « Charge enchantée » une charge). De face et de dos, la patte qui recule paraît plus courte, comme vue en profondeur, et une tête baissée entre les pattes ne bouge plus avec elles. Une créature qui flotte se balance doucement et respire. La remise à neuf de la bibliothèque, au premier lancement, refait 4 créatures à la fois, les moins bien notées d'abord.

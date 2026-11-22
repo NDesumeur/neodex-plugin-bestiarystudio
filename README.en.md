@@ -76,3 +76,27 @@ Nothing is synced: creatures, models and images stay on the PC that has the grap
 ## Install
 
 In NeoDex: **NeoStore → Discover → NeoBestiary Studio → Install**.
+
+## The night queue
+
+In Create, write your creatures in « Night queue », one per line: « Name: description ». « [fire] » at the start of the line picks the type. « Start the queue » summons them one after another (sketches, the best one chosen automatically, the whole creature), then stops when the queue is empty. The queue is kept if you close the Studio; each finished creature leaves it.
+
+## The shared palette
+
+In the Sprite Lab, « Use as reference » adds the colours of a creature you like to the shared palette (3 creatures at most). Tick « Shared palette » on another creature: its 20 images take those colours, for a bestiary with a consistent style. « × » forgets it.
+
+## Creatures that really move
+
+When attacking, the creature winds up, leans from its feet and, for a contact attack (charge, horn, bite, claw…), leaps toward its target before coming back; it squashes then stretches. When walking, legged creatures take real steps: each whole leg swings from the hip and the foot lifts, instead of feet that slid and tore apart; a tail or belly resting on the ground no longer moves like a leg. Floating creatures are no longer frozen: their tentacles, roots or veils sway. On first launch, the attacks and walk of existing creatures are rebuilt once (the old walk stays available with ◀ ▶).
+
+Each species has its own gait, read from its sheet: a feline glides in long supple strides, an insect scurries, a bird hops and bobs its head, a reptile waddles, a very large or heavy creature moves slowly and sways. The body follows the step: the head nods, the tail swings, wings beat, a mane or antennae trail a little behind, and several heads each move at their own pace. Snakes, worms and fish have a real wave travelling along the body, from tail to head.
+
+Each attack type has its own gesture, in all four directions (a claw sweeps, a bite lunges, a whip spins the body…). The name counts: « Griffe de Vent » is a claw strike, and a gesture that needs a tail, a horn or wings is only given to a creature that has them. Effects take the creature's colour and vary a little from one attack to another; dark elements get a light outline to stay readable. The creature's outline stays the same in every frame.
+
+In Directions, each attack also plays « like in the Arena »: the creature hits a target that recoils, flashes white and shakes; a click plays its sound.
+
+**Check**: a tab where every creature walks, with a score from 1 to 5 and what is wrong (legs not found, stray pixels, broken outline, size or colours changing between directions, an attack whose name announces another gesture, stats that do not fit the body). **Redo** rebuilds it without a graphics card; **Open** opens it in Directions. The score also shows on library cards. At creation, if the side view has a big flaw, it is redone once by itself and the better one is kept.
+
+**Redraw** (Check): views that only a new drawing can fix are redone with the graphics card, one creature at a time or all at once: a side view with legs stuck together (redrawn with the legs well apart), a side view drawn in the wrong posture, a view that changes size or colours (the side or back view, whichever stands out). The new view is only kept if the score does not drop; the old one stays in the versions.
+
+A sheet that said « crawling » for a four-legged (or more) creature thought it lay flat: the posture now follows the legs in the description. Attacks whose name announces a gesture always keep it (« Cri de Yaga » stays a cry, « Charge enchantée » a charge). Seen from the front or back, the leg going back looks shorter, as if seen in depth, and a head lowered between the legs no longer moves with them. A floating creature sways gently and breathes. The library refresh on first launch redoes 4 creatures at a time, the lowest scores first.

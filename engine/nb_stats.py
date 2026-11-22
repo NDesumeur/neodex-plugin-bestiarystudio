@@ -13,6 +13,8 @@ import random
 import math
 import re
 
+import nb_core
+
 import nb_moves
 
 RARITIES = ("commun", "peu commun", "rare", "épique", "légendaire")
@@ -221,6 +223,22 @@ def rarity(key, menace=3, prestige=None, fixed=None, others=()):
     return RARITIES[max(0, min(4, tier))]
 
 
+def _measure(text, units):
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*(" + "|".join(sorted(units, key=len, reverse=True)) + r")\b", nb_core.fold(text or ""))
+    return float(m.group(1).replace(",", ".")) * units[m.group(2)] if m else None
+
+
+def body_class(poids=None, taille=None):
+    """« lourde » (300 kg ou 3 m au moins), « legere » (moins de 5 kg ou de 40 cm) ou « »."""
+    kg = _measure(poids, {"kg": 1, "t": 1000, "tonnes": 1000, "tonne": 1000, "g": .001})
+    m = _measure(taille, {"m": 1, "cm": .01})
+    if (kg or 0) >= 300 or (m or 0) >= 3:
+        return "lourde"
+    if (kg is not None and kg < 5) or (m is not None and m < .4):
+        return "legere"
+    return ""
+
+
 def stats(key, rare, typ, posture="", poids=None, taille=None):
     """{pv, attaque, defense, vitesse} : le budget de la rareté, réparti selon le gabarit, la posture et le type."""
     w = dict(pv=1.0, attaque=1.0, defense=1.0, vitesse=1.0)
@@ -238,6 +256,13 @@ def stats(key, rare, typ, posture="", poids=None, taille=None):
     r = _rng(f"stats:{key}")
     for k in w:
         w[k] *= r.uniform(.88, 1.12)
+    # le corps a le dernier mot : une créature énorme n'est jamais plus rapide que solide, une toute petite jamais lente
+    # et blindée (le type ou la posture pouvaient l'emporter sur le poids ; la taille ne comptait pas)
+    cls = body_class(poids, taille)
+    if cls == "lourde":
+        w["vitesse"] = min(w["vitesse"], .9 * max(w["pv"], w["defense"]))
+    elif cls == "legere":
+        w["vitesse"] = max(w["vitesse"], (w["pv"] + w["defense"]) / 2.2)
     budget = BUDGET[RARITIES.index(rare)]
     total = sum(w.values())
     return {k: max(10, round(budget * v / total)) for k, v in w.items()}
@@ -270,21 +295,62 @@ def _options(anatomy, typ):
     """Genres que le corps et le type rendent crédibles, du plus évident au plus général."""
     text = " ".join(anatomy or []).lower()
     out = [g for part, g in BODY if part in text]
+    out = [g for g in out if body_allows(g, nb_core.fold(text))]
     out += [BY_TYPE.get(typ, "onde"), "charge", "projectile", "onde", "cri", "griffe", "rayon", "explosion"]
     return list(dict.fromkeys(out))
+
+
+# (9) des attaques qui collent à la créature. Le nom est ce que le joueur lit : « Griffe de Vent » est un coup de griffes,
+# même si la plume a écrit « pluie ». Et un geste qui demande une partie du corps (queue, corne, dard, tentacules, ailes)
+# n'est gardé que si la créature l'a.
+NAME_GENRE = (
+    ("griffe", r"griff|serre|lacer|entaill|tranch|ecorch"), ("morsure", r"mors|croc|machoire|gueule|crocs|mord|bec\b|devor"),
+    ("fouet", r"fouet|queue|liane|lanier"), ("corne", r"corne|cornu|defense|empal|encorn"),
+    ("dard", r"dard|aiguillon|piqu|pointe venim"), ("etreinte", r"etrein|enlac|tentacul|etrangl|enserr|constrict"),
+    ("souffle", r"souffle|haleine|expir"), ("rayon", r"rayon|laser|faisceau"), ("cri", r"\bcri\b|hurl|rugi|\bchant|beugl|glapi"),
+    ("rafale", r"rafale|bourrasque|battement d.ailes|coup d.ailes"), ("pluie", r"pluie|averse|grele|deluge|tombee"),
+    ("explosion", r"explos|deflagr|eruption"), ("onde", r"\bonde|seisme|tremblement|pulsation"),
+    ("charge", r"charge|ruee|plaquage|coup de tete|percut|bousculad"), ("projectile", r"crach|jet\b|projectil|boulet|tir\b|lance"),
+    ("soin", r"\bsoin|guerison|regener|soigne"), ("renfort", r"renfort|cuirasse|bouclier|armure|concentration|furie"),
+)
+NEEDS = {"fouet": ("tail", "vine", "tentacle", "whip", "queue", "liane"), "corne": ("horn", "tusk", "antler", "corne", "defense"),
+         "dard": ("sting", "stinger", "dard", "aiguillon", "scorpion", "wasp", "bee", "spike", "quill", "thorn", "piqu", "epine"),
+         "etreinte": ("tentacle", "coil", "vine", "snake", "serpent", "arm", "tentacule", "liane"),
+         "rafale": ("wing", "aile", "feather", "plume")}
+
+
+def name_genre(nom):
+    """Le genre que le nom de l'attaque annonce (« Griffe de Vent » -> griffe), ou None."""
+    text = nb_core.fold(nom or "")
+    return next((g for g, rx in NAME_GENRE if re.search(rx, text)), None)
+
+
+def body_allows(genre, body):
+    """body : ce qu'on sait du corps (anatomie, description anglaise, silhouette) ; vide : on ne sait pas, tout passe."""
+    if not body or genre not in NEEDS:
+        return True
+    return any(w in body for w in NEEDS[genre])
 
 
 def pick_moves(written, count, typ, anatomy=()):
     """count attaques parmi celles écrites (de la plus faible à la plus forte) : la 1re et les plus fortes, chacune
     d'un genre différent, au moins une au contact et une à distance ou en zone, le soutien jamais en premier."""
     moves = [dict(a) for a in written if isinstance(a, dict)]
+    body = nb_core.fold(" ".join(anatomy or []))
     for a in moves:
         if a.get("genre") not in GENRES:
+            a["genre"] = None
+        said = name_genre(a.get("nom"))
+        if said:  # le nom l'annonce en toutes lettres (« Fouet d'argile ») : c'est ce geste, même sans vraie queue
+            a["genre"] = said
+        elif a["genre"] and not body_allows(a["genre"], body):  # un geste que rien n'annonce et que son corps ne permet pas
             a["genre"] = None
     chosen = moves[:1] + moves[1:][-(count - 1):] if len(moves) > count else moves
     used, opts = set(), _options(anatomy, typ)
     for a in chosen:  # genre manquant ou en double : un autre que le corps permet
         if not a["genre"] or a["genre"] in used:
+            if name_genre(a.get("nom")):  # « Croc 2 » après « Croc » : le nom disait l'ancien geste, il prend celui du catalogue
+                a["nom"] = ""
             a["genre"] = next((g for g in opts if g not in used), "charge")
         used.add(a["genre"])
     while len(chosen) < min(count, 2):  # la plume en a écrit trop peu
@@ -295,10 +361,26 @@ def pick_moves(written, count, typ, anatomy=()):
         chosen.append(chosen.pop(0))
     kinds = {portee(a["genre"]) for a in chosen}
     if "contact" not in kinds and chosen:
-        chosen[0]["genre"] = next((g for g in opts if g in CONTACT and g not in used), "charge")
+        _balance(chosen, moves, 0, CONTACT, next((g for g in opts if g in CONTACT and g not in used), "charge"))
     elif not kinds & {"distance", "zone"} and len(chosen) > 1:
-        chosen[-1]["genre"] = next((g for g in opts if g in RANGED | AREA and g not in used), "projectile")
+        _balance(chosen, moves, -1, RANGED | AREA, next((g for g in opts if g in RANGED | AREA and g not in used), "projectile"))
     return chosen
+
+
+def _balance(chosen, moves, at, want, genre):
+    """Il manque une attaque au contact (ou à distance) : on change le geste d'une attaque dont le nom n'annonce rien ;
+    sinon une attaque écrite mais pas retenue, du bon genre, prend la place ; sinon l'attaque prend le nom du catalogue
+    (avant, « Cri de Yaga » devenait une charge et « Soin réparateur » une rafale)."""
+    free = [k for k in (range(len(chosen)) if at == 0 else range(len(chosen) - 1, -1, -1)) if not name_genre(chosen[k].get("nom"))]
+    hit = [k for k in free if chosen[k]["genre"] not in SUPPORT]  # un soin écrit comme tel reste un soin si on peut
+    taken = {a.get("genre") for a in chosen}
+    spare = next((a for a in moves if a not in chosen and a.get("genre") in want and a["genre"] not in taken), None)
+    if hit or (free and not spare):
+        chosen[(hit or free)[0]]["genre"] = genre
+    elif spare:
+        chosen[at] = spare
+    else:
+        chosen[at].update(nom="", genre=genre)  # nom : celui du catalogue
 
 
 CAP = 2  # une créature peut avoir des attaques jusqu'à 2 crans au-dessus de sa rareté (commune : jusqu'à rare)
@@ -367,6 +449,10 @@ if __name__ == "__main__":
     s = stats("x", "rare", "roche", "quatre_pattes", "540 kg")
     assert abs(sum(s.values()) - BUDGET[2]) <= 4 and s["defense"] > s["vitesse"], s
     assert rarity("abc") == rarity("abc")
+    for i in range(50):  # le corps a le dernier mot, quel que soit le type
+        big = stats(f"b{i}", "rare", "foudre", "vole", taille="12 m")
+        tiny = stats(f"t{i}", "rare", "acier", "quatre_pattes", poids="2 kg")
+        assert big["vitesse"] <= max(big["pv"], big["defense"]) and tiny["pv"] + tiny["defense"] <= 2.6 * tiny["vitesse"], (big, tiny)
     # prestige : un dragon ancien n'est jamais commun, un rat jamais légendaire
     assert all(rarity(f"d{i}", prestige=95) in ("épique", "légendaire") for i in range(200))
     assert all(rarity(f"r{i}", prestige=10) in ("commun", "peu commun") for i in range(200))
@@ -389,6 +475,12 @@ if __name__ == "__main__":
         kinds = {portee(m["genre"]) for m in ms}
         assert kinds & {"distance", "zone"} and "contact" in kinds, ms
     assert len(pick_moves([], 2, "eau")) == 2
+    yaga = pick_moves([dict(nom="Cri de Yaga", genre="cri"), dict(nom="Balayage", genre="fouet"), dict(nom="Sort de protection", genre="soin")], 2, "esprit")
+    assert all(not name_genre(a["nom"]) or name_genre(a["nom"]) == a["genre"] for a in yaga) and "fouet" in {a["genre"] for a in yaga}, yaga
+    vent = pick_moves([dict(nom="Griffe de Vent", genre="pluie"), dict(nom="Balayage", genre="fouet")], 2, "vent",
+                      ["4 legs", "sharp claws"])
+    assert vent[0]["genre"] == "griffe" and vent[1]["genre"] != "fouet", vent  # le nom compte ; pas de queue, pas de fouet
+    assert name_genre("Crocs de Lune") == "morsure" and name_genre("Lumière") is None and name_genre("Charge enchantée") == "charge"
     for i in range(300):  # jamais d'attaque à plus de 2 crans de la créature
         kc = card(f"c{i}", dict(type=random.Random(i).choice(sorted(CHART)), prestige=10,
                                 attaques=[dict(nom="A", genre="explosion"), dict(nom="B", genre="projectile"), dict(nom="C", genre="charge")]))

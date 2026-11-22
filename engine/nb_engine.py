@@ -137,6 +137,17 @@ def said_posture(description):
     return next((p for p, rx in _GUESS if nb_core.re.search(rx, folded)), "")
 
 
+def fix_posture(description, brief):
+    """(4) « une créature rampante à quatre pattes » : le mot « rampante » donnait la posture rampe et 0 patte, et le profil
+    était dessiné à plat, couché. Les pattes comptées dans la description l'emportent (4 : à quatre pattes, 6 et plus :
+    plusieurs pattes). Rend une copie de la fiche, corrigée ou non."""
+    b = dict(brief or {})
+    n, p = counts(description or "").get("legs", 0), b.get("posture")
+    if n >= 4 and (p in ("rampe", "deux_jambes") or (p == "quatre_pattes" and n > 4)):
+        b.update(posture="quatre_pattes" if n == 4 else "plusieurs_pattes", pattes=n)
+    return b
+
+
 def guess_brief(description):
     """Sans plume (pas d'Ollama) : la posture devinée par mots-clés, la description reste en français."""
     folded = nb_core.fold(description)
@@ -185,6 +196,15 @@ def design_prompt(description, brief=None):
 PROPORTIONS = (" Same proportions as the front view: same head size, same leg length and body size, drawn true to scale "
                "(the side view is as tall as the front view); all legs fully visible and straight under the body, "
                "feet on the ground.")
+
+
+# (2, 3) un redessin après le contrôle : ce qui clochait, dit en plus au modèle
+FIX_HINT = {
+    "pattes": (" Every leg is drawn apart from the others, with clear empty space between the legs, mid-stride: the near "
+               "front leg reaches forward and the near hind leg back, so each leg is seen on its own, down to its foot."),
+    "tailles": " It is exactly as big and as tall as in the front view, same body length and proportions, not shrunk or stretched.",
+    "couleurs": " It keeps exactly the colors of the front view: the same palette, markings and shades, nothing recolored.",
+}
 
 
 def view_prompt(direction, legs=False, brief=None, description=""):
@@ -561,8 +581,15 @@ def score_view(im, ref, direction):
     return base + 6.0 * similarity(im, ref)
 
 
+def crawls_on_legs(description, brief=None):
+    """« un insecte à six pattes qui rampe » : la fiche dit « rampe, 0 patte », mais il marche sur ses pattes."""
+    return (brief or {}).get("posture") == "rampe" and counts(description or "").get("legs", 0) >= 2
+
+
 def has_legs(description, brief=None):
     """La marche par édition de pose n'a de sens qu'avec des pattes ; sinon (œil, blob, serpent) : rebond."""
+    if crawls_on_legs(description, brief):
+        return True
     if brief and brief.get("posture"):
         return brief["posture"] not in FLOATING | {"rampe", "glisse", "roule"} and brief.get("pattes", 0) > 0
     spec = nb_core.analyze("", description)
@@ -655,15 +682,16 @@ def generate_directions(client, design, seed, progress=lambda m: None, cancel=la
 
 
 def generate_view(client, refs, direction, seed, progress=lambda m: None, cancel=lambda: False, legs=False,
-                  brief=None, description=""):
-    """Une nouvelle version d'une vue (« Refaire ») : refs = [design] ou [design, dos] pour le profil."""
+                  brief=None, description="", fix=()):
+    """Une nouvelle version d'une vue (« Refaire ») : refs = [design] ou [design, dos] pour le profil.
+    fix : ce que le contrôle a trouvé (pattes, tailles, couleurs), redit au modèle (FIX_HINT)."""
     label = {"haut": "Vue de dos", "gauche": "Profil"}[direction]
     if legs:
         refs = refs[:1]
     if direction == "haut":  # vu de dos, la gauche et la droite s'échangent : le bâton tenu à gauche passe à droite
         refs = [ImageOps.mirror(refs[0])]
-    return _best(client, view_prompt(direction, legs, brief, description), refs, direction, seed, 1, cancel, progress, label,
-                 (brief or {}).get("posture", ""))[0]
+    prompt = view_prompt(direction, legs, brief, description) + "".join(FIX_HINT[k] for k in fix if k in FIX_HINT)
+    return _best(client, prompt, refs, direction, seed, 1, cancel, progress, label, (brief or {}).get("posture", ""))[0]
 
 
 def leg_zone(im):
@@ -675,26 +703,29 @@ def leg_zone(im):
         return None, None
     x0, y0, x1, y1 = box
     h = y1 - y0
-    px = a.load()
+    px = np.asarray(a) > 0
 
     def runs(y):
-        n, inside, width = 0, False, 0
-        for x in range(x0, x1):
-            on = px[x, y] > 0
-            width += on
-            if on and not inside:
-                n += 1
-            inside = on
-        return n, width
+        row = px[y, x0:x1]
+        return int(row[0]) + int((row[1:] & ~row[:-1]).sum()), int(row.sum())
 
     widest = max(runs(y)[1] for y in range(y0, y1, max(1, h // 40)))
     top = y1 - round(h * .15)
-    for y in range(y1 - round(h * .15), y1 - round(h * .45), -1):  # on remonte tant que ça ressemble à des pattes
+    # on remonte tant que ça ressemble à des pattes ; quelques lignes où elles se croisent (deux pattes l'une devant
+    # l'autre près du sol) ne l'arrêtent plus, si au moins 3 lignes de pattes reprennent au-dessus : avant, seuls les
+    # pieds bougeaient, et ils glissaient en se détachant
+    gap, run, pending = 0, 0, False
+    for y in range(y1 - 1, y1 - round(h * .5), -1):
         n, w = runs(y)
         if n >= 2 or w < widest * .55:
-            top = y
+            run, gap = run + 1, 0
+            pending = pending and run < 3
+            if not pending and y <= y1 - round(h * .15):
+                top = y
         else:
-            break
+            gap, run, pending = gap + 1, 0, True
+            if y < y1 - round(h * .15) and gap > max(2, round(h * .1)):
+                break
     return top, box
 
 
@@ -719,7 +750,7 @@ def _leg_masks(im, top):
     return [groups[b] for b in sorted(big, key=lambda b: cx[b])]
 
 
-def _feet_masks(im, top, box):
+def _feet_masks(im, top, box, ground=False):
     """Chaque patte suivie depuis son pied : les pieds sont les morceaux séparés tout en bas, puis on remonte ligne par ligne
     vers la hanche ; un morceau qui réunit plusieurs pattes (elles se touchent en haut) est partagé au plus près de chacune,
     un morceau large qui ne porte qu'un pied (le ventre) reste au corps. [] si on ne trouve pas au moins 2 pieds."""
@@ -727,18 +758,24 @@ def _feet_masks(im, top, box):
     x0, _, x1, y1 = box
 
     def runs(y):
-        out, start = [], None
-        for x in range(x0, x1 + 1):
-            on = x < x1 and a[y, x]
-            if on and start is None:
-                start = x
-            elif not on and start is not None:
-                out.append((start, x - 1))
-                start = None
+        d = np.diff(np.concatenate([[0], a[y, x0:x1].astype(np.int8), [0]]))
+        return [(x0 + int(s), x0 + int(e) - 1) for s, e in zip(np.nonzero(d == 1)[0], np.nonzero(d == -1)[0])]
+    gap = max(2, round((x1 - x0) * .03)) if ground else 0  # de profil, deux pattes proches restent deux pieds
+
+    def feet_at(y):  # les griffes d'un même pied (séparées de quelques px) ne comptent que pour un pied
+        out = []
+        for r in runs(y):
+            if out and gap and r[0] - out[-1][1] - 1 <= gap:
+                out[-1] = (out[-1][0], r[1])
+            else:
+                out.append(r)
         return out
     band = range(y1 - 1, top + (y1 - top) // 3 - 1, -1)  # les deux tiers bas de la zone : des pattes écartées ont leurs pieds plus haut
-    best = max(band, key=lambda y: (len(runs(y)), y))  # la ligne où l'on voit le plus de pieds (la plus basse à égalité)
-    feet = runs(best)
+    best = max(band, key=lambda y: (len(feet_at(y)), y))  # la ligne où l'on voit le plus de pieds (la plus basse à égalité)
+    feet = feet_at(best)
+    if ground:  # de face : un pied touche le sol (le menton d'une tête baissée entre les pattes, non)
+        low = y1 - 1 - max(2, round((y1 - top) * .08))
+        feet = [(r0, r1) for r0, r1 in feet if a[low:y1, r0:r1 + 1].any()]
     if not 2 <= len(feet) <= 10:
         return []
     cx = [(r0 + r1) / 2 for r0, r1 in feet]
@@ -748,12 +785,18 @@ def _feet_masks(im, top, box):
         got = [[] for _ in feet]
         for r0, r1 in runs(y):
             mine = [k for k, c in enumerate(cx) if r0 - 2 <= c <= r1 + 2]
-            for x in range(r0, r1 + 1):  # rien au-dessus d'un pied : le corps
-                if not mine:
-                    break
-                k = min(mine, key=lambda k: abs(x - cx[k]))
-                if len(mine) > 1 or r1 - r0 + 1 <= 2.5 * wf[k] + 2 or abs(x - cx[k]) <= wf[k] * .75 + 1:
-                    got[k].append(x)
+            if not mine:  # rien au-dessus d'un pied : le corps
+                continue
+            xs = np.arange(r0, r1 + 1)
+            c = np.array([cx[k] for k in mine])
+            who = np.array(mine)[np.abs(xs[:, None] - c[None]).argmin(1)]  # chaque pixel va au pied le plus proche
+            wk, ck = np.array(wf)[who], np.array(cx)[who]
+            # plusieurs pieds sous un même morceau : il est partagé entre eux, sauf s'il est bien plus large qu'eux (la tête
+            # baissée entre les pattes de devant, le poitrail) : alors seul le haut de chaque patte suit, le reste est au corps
+            shared = len(mine) > 1 and r1 - r0 + 1 <= 1.6 * sum(wf[k] for k in mine) + 2 * gap
+            ok = shared | (r1 - r0 + 1 <= 2.5 * wk + 2) | (np.abs(xs - ck) <= wk * .75 + 1)
+            for k in mine:
+                got[k] += xs[ok & (who == k)].tolist()
         for k, xs in enumerate(got):
             if xs:
                 masks[k][y, xs] = True
@@ -775,14 +818,16 @@ def _halves(im, top, box):
     return [m for m in (left, right) if m.any()]
 
 
-def step_frame(im, direction, phase):
+def step_frame(im, direction, phase, g=None):
     """Un pas procédural à partir de la pose de repos : mêmes pixels, seules les pattes bougent, chacune à part.
 
     Les pattes voisines sont en opposition (droite/gauche, avant/arrière : la marche en diagonale des quadrupèdes).
     profil (tête à gauche) : chaque patte pivote depuis la hanche (cisaillement nul en haut, fort au pied) ; celle qui
     passe devant lève le pied au demi-pas. face / dos : la patte qui avance se lève et se raccourcit, l'autre porte.
     Au pas complet, le corps descend d'un pixel (appui).
+    g : la démarche (gait) ; le haut du corps suit le pas (_upper : queue, tête, oreilles, têtes, ailes).
     """
+    g = g or GAIT[""]
     im = im.convert("RGBA")
     top, box = leg_zone(im)
     if top is None:
@@ -791,7 +836,8 @@ def step_frame(im, direction, phase):
     h, zh = y1 - y0, max(1, y1 - top)
     # les pattes : par morceaux séparés, ou suivies depuis les pieds quand elles se touchent (sinon deux moitiés bougeaient
     # chacune d'un bloc : les deux pattes avant ensemble, les deux arrière ensemble)
-    lm, fm = _leg_masks(im, top), _feet_masks(im, top, box)
+    face = direction in ("bas", "haut")  # de face, les morceaux nets d'abord : le suivi depuis les pieds y déchirait les pattes
+    lm, fm = _leg_masks(im, top), _feet_masks(im, top, box, ground=face)
     # un morceau du milieu bien plus large que les autres est le ventre, pas une patte : il reste en place (sinon il passait
     # pour une patte du milieu et les deux vraies pattes, de chaque côté, se levaient ensemble)
     # (on y cherche alors les pieds : deux pattes collées sous le ventre sont suivies chacune depuis son pied)
@@ -807,9 +853,14 @@ def step_frame(im, direction, phase):
             else:
                 keep.append(m)
         lm = sorted(keep, key=lambda m: np.nonzero(m)[1].mean())
-    face = direction in ("bas", "haut")  # de face, les morceaux nets d'abord : le suivi depuis les pieds y déchirait les pattes
     masks = (lm if face and len(lm) >= 2 else fm if len(fm) > len(lm) else lm) or _halves(im, top, box)
+    if not face:  # de profil, une queue ou un ventre couché au sol (bien plus long que haut), ou qui ne touche pas le sol, n'est pas une patte
+        legs_only = [m for m in masks if _is_leg(m) and np.nonzero(m)[0].max() >= y1 - 1 - max(2, round(zh * .15))]
+        masks = legs_only if len(legs_only) >= 2 else masks
     arr = np.asarray(im)
+    masks = _attach(masks, arr, top, reach=max(6, round(arr.shape[1] * .012)))  # griffes et bouts de doigts, à l'échelle de l'image
+    if face:  # tout près du sol, rien n'est le ventre : les doigts écartés suivent leur pied (sinon ils restaient au sol)
+        masks = _attach(masks, arr, y1 - max(2, round(zh * .12)), reach=arr.shape[1])
     body = arr.copy()
     body[top:] = 0
     rest = np.asarray(im.getchannel("A")) >= 128
@@ -817,37 +868,283 @@ def step_frame(im, direction, phase):
     for m in masks:
         rest &= ~m
     out = np.zeros_like(arr)
-    swing = max(2, round(zh * .3))
+    keep = np.zeros_like(arr)
+    keep[rest] = arr[rest]  # le ventre (rattaché à aucune patte) reste en place, derrière les pattes
+    if not face:  # le haut des cuisses reste aussi derrière : une patte qui pivote ne laisse pas de trou sous la hanche
+        hip = np.zeros(arr.shape[:2], bool)
+        hip[top:top + max(2, round(zh * .25))] = True
+        keep[hip] = arr[hip]
     # de profil, 4 pattes (avant, avant, arrière, arrière) : chaque paire en opposition, en diagonale (avant proche avec arrière loin)
-    signs = [1, -1, -1, 1] if len(masks) == 4 and direction not in ("bas", "haut") else [1 if k % 2 == 0 else -1 for k in range(len(masks))]
+    signs = [1, -1, -1, 1] if len(masks) == 4 and not face else [1 if k % 2 == 0 else -1 for k in range(len(masks))]
     for k, m in enumerate(masks):
         sign = signs[k]
         leg = np.where(m[..., None], arr, 0).astype(arr.dtype)
-        moved = np.zeros_like(leg)
-        ahead = sign * phase > 0  # la patte qui avance
-        if direction in ("bas", "haut"):
-            lift = max(1, round(h * .07 * abs(phase))) if ahead else 0
-            moved[:arr.shape[0] - lift] = leg[lift:]
-        else:
-            lift = round(zh * .14) if ahead and abs(phase) == .5 else 0
-            for y in range(top, y1):
-                dx = -round(sign * phase * swing * (y - top) / zh)  # vers la gauche = vers l'avant
-                src = leg[y]
-                dst = moved[y - lift] if y - lift >= top else None
-                if dst is None:
-                    continue
-                if dx >= 0:
-                    dst[dx:] = np.where(src[:arr.shape[1] - dx, 3:] > 0, src[:arr.shape[1] - dx], dst[dx:])
-                else:
-                    dst[:dx] = np.where(src[-dx:, 3:] > 0, src[-dx:], dst[:dx])
+        ahead = sign * phase > 0  # la patte qui avance (en l'air)
+        ys, xs = np.nonzero(m)
+        if face:
+            # (5) de face ou de dos, la patte pivote vers l'avant ou l'arrière, dans la profondeur : au demi-pas celle qui
+            # avance se lève (le pied monte, le haut passe derrière le corps) ; au pas complet elle est posée, et celle qui
+            # s'éloigne de nous paraît plus courte (de face : la patte restée en arrière ; de dos : celle qui avance)
+            # (la patte se replie depuis la hanche au lieu de monter d'un bloc : plus de trou dans le ventre au-dessus)
+            hip, ln = int(ys.min()), int(ys.max()) - int(ys.min()) + 1
+            lift = max(2, round(h * .07)) if ahead and abs(phase) == .5 else 0
+            moved = _squash(leg, hip, max(.5, 1 - lift / ln)) if lift else leg
+            if abs(phase) == 1 and ahead == (direction == "haut"):
+                moved = _squash(moved, hip, .82)
+        else:  # elle pivote d'un bloc depuis la hanche (plus de patte penchée en parallélogramme), le pied se lève au demi-pas
+            hip = (xs.mean(), ys.min())
+            moved = _rotate(leg, hip, sign * phase * g["angle"])
+            lift = round(zh * .2) if ahead and abs(phase) == .5 else 0
+            if lift:
+                moved = np.concatenate([moved[lift:], np.zeros_like(moved[:lift])])
         out = np.where(moved[..., 3:] > 0, moved, out)
-    dy = 1 if abs(phase) >= 1 and h >= 24 else 0
+    body, keep = _upper(body, keep, arr, masks, top, box, direction, phase, g)
+    dy = g["bob"] if abs(phase) >= 1 and h >= 24 else 0  # appui : le corps descend
     if dy:
         body = np.roll(body, dy, axis=0)
         body[:dy] = 0
-    body[rest] = arr[rest]  # ce qui n'est rattaché à aucune patte (le ventre, une patte non suivie) reste en place au lieu de disparaître
+    out = np.where(out[..., 3:] > 0, out, keep)
     out = np.where(body[..., 3:] > 0, body, out)  # le corps passe devant le haut des pattes
     return Image.fromarray(out.astype(np.uint8), "RGBA")
+
+
+# ------------------------------------------------------------------ démarche : chaque espèce marche à sa façon
+# angle : écart d'une patte au pas complet (degrés) ; bob : descente du corps à l'appui (px) ; nod : la tête plonge de plus
+# à l'appui ; ms : durée d'une image dans l'Arène (avant la vitesse) ; sway : de face, le corps passe d'une patte à l'autre
+GAIT = {
+    "": dict(angle=26, bob=1, nod=1, ms=90, sway=1),
+    "felin": dict(angle=28, bob=1, nod=0, ms=85, sway=0),  # souple : la tête reste droite, grands pas
+    "insecte": dict(angle=16, bob=0, nod=0, ms=65, sway=0),  # petits pas rapides, le corps ne monte ni ne descend
+    "oiseau": dict(angle=16, bob=1, nod=2, ms=75, sway=1),  # petits pas, la tête qui pique en avant
+    "reptile": dict(angle=22, bob=0, nod=0, ms=100, sway=2),  # le corps se dandine d'un côté à l'autre
+    "lourd": dict(angle=18, bob=2, nod=1, ms=120, sway=1),  # grand ou très lourd : lent, chaque pas l'enfonce
+}
+GAIT_WORDS = (
+    ("insecte", r"insecte|araignee|fourmi|scarabee|mante|criquet|sauterelle|scorpion|cafard|coccinelle|acarien|crabe|"
+                r"insect|spider|beetle|mantis|cricket|grasshopper|crab"),
+    ("oiseau", r"oiseau|aigle|corbeau|hibou|chouette|faucon|poule|\bcoq\b|canard|pingouin|manchot|autruche|perroquet|"
+               r"moineau|pigeon|\bbird|eagle|owl|crow|raven|chicken|duck|penguin"),
+    ("felin", r"felin|\bchat|lynx|tigre|\blion|panthere|guepard|jaguar|\bloup|renard|chien|puma|leopard|"
+              r"\bcat\b|feline|tiger|wolf|fox|\bdog\b|cheetah"),
+    ("reptile", r"lezard|reptile|crocodile|alligator|salamandre|gecko|iguane|varan|cameleon|tortue|triton|"
+                r"lizard|turtle|tortoise|newt"),
+)
+TAIL_ANGLE = 12  # degrés : la queue balance d'autant à chaque pas complet
+
+
+def _measure(text, units):
+    """« 1,5 m » -> 1.5 (units = {"m": 1, "cm": .01}) ; None si rien de lisible."""
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*(" + "|".join(sorted(units, key=len, reverse=True)) + r")\b", fold_text(text))
+    return float(m.group(1).replace(",", ".")) * units[m.group(2)] if m else None
+
+
+def fold_text(text):
+    return nb_core.fold(text or "")
+
+
+def gait(description, brief=None, lore=None):
+    """La démarche de la créature (une copie de GAIT, plus kind, wings, heads), d'après ses mots, sa taille et son poids."""
+    b, lo = brief or {}, lore or {}
+    text = fold_text(" ".join([description or "", b.get("en", ""), b.get("silhouette", ""), lo.get("espece", ""),
+                               lo.get("description", "")]))
+    kind = next((k for k, rx in GAIT_WORDS if re.search(rx, text)), "")
+    if not kind and b.get("posture") == "plusieurs_pattes":
+        kind = "insecte"
+    kg = _measure(lo.get("poids"), {"kg": 1, "kilos": 1, "t": 1000, "tonnes": 1000, "tonne": 1000, "g": .001})
+    m = _measure(lo.get("taille"), {"m": 1, "cm": .01, "metres": 1, "metre": 1})
+    if (kg or 0) >= 300 or (m or 0) >= 3:
+        kind = "lourd"
+    heads = counts(description).get("head", 1) if description else 1
+    return dict(GAIT[kind], kind=kind or "pattes", wings=has_wings(description or "", brief), heads=heads)
+
+
+def walk_ms(g, vitesse=None):
+    """La durée d'une image de marche dans l'Arène : la démarche, puis la vitesse (une créature rapide trotte)."""
+    ms = g["ms"]
+    if vitesse:
+        ms *= max(.8, min(1.2, 1.2 - vitesse / 200))
+    return round(ms)
+
+
+def _shift(a, dx, dy):
+    """Le tableau décalé de (dx, dy), sans retour de l'autre côté."""
+    out = np.zeros_like(a)
+    H, W = a.shape[:2]
+    if abs(dx) >= W or abs(dy) >= H:
+        return out
+    out[max(0, dy):H + min(0, dy), max(0, dx):W + min(0, dx)] = a[max(0, -dy):H + min(0, -dy), max(0, -dx):W + min(0, -dx)]
+    return out
+
+
+def _move(a, region, dx, dy):
+    """Les pixels de region déplacés de (dx, dy), par-dessus le reste ; leur ancienne place se vide."""
+    if not (dx or dy) or not region.any():
+        return a
+    part = np.where(region[..., None], a, 0).astype(a.dtype)
+    out = a.copy()
+    out[region] = 0
+    moved = _shift(part, dx, dy)
+    return np.where(moved[..., 3:] > 0, moved, out)
+
+
+def _upper(body, keep, arr, masks, top, box, direction, phase, g):
+    """Le haut du corps suit le pas. De profil (tête à gauche) : la queue balance (1), la tête plonge à l'appui (2),
+    les oreilles, crêtes et antennes traînent d'un pixel au demi-pas (36), plusieurs têtes bougent chacune à son rythme
+    (38). De face / dos : le corps passe d'une patte sur l'autre (2). Avec des ailes, elles battent en marchant (3)."""
+    x0, y0, x1, y1 = box
+    h, w = y1 - y0, x1 - x0
+    full, half = abs(phase) >= 1, abs(phase) == .5
+    if g.get("wings"):  # les ailes battent aussi en marchant, moins qu'en vol
+        body = np.asarray(flap(Image.fromarray(body.astype(np.uint8), "RGBA"), direction, phase * .6)).copy()
+    if direction in ("bas", "haut"):
+        s = g.get("sway", 0)
+        if s and full:
+            body = _shift(body, round(phase) * s, 0)
+        return body, keep
+    a = arr[..., 3] >= 128
+    legs = np.zeros_like(a)
+    for m in masks:
+        legs |= m
+    lx = np.nonzero(legs)[1]
+    if not len(lx):
+        return body, keep
+    front, rear = int(lx.min()), int(lx.max())
+    cols = np.arange(a.shape[1])[None, :]
+    rows = np.arange(a.shape[0])[:, None]
+    # (1) la queue : ce qui dépasse derrière les pattes arrière, tourné autour de sa racine
+    tail = a & ~legs & (cols > rear + 1)
+    if a.sum() * .02 <= tail.sum() <= a.sum() * .3 and tail[:, :rear + 6].any():
+        root_ys = np.nonzero(tail[:, rear + 2:rear + 5].any(1))[0]
+        root = (rear + 2, root_ys.mean() if len(root_ys) else np.nonzero(tail)[0].mean())
+        part = np.where(tail[..., None], arr, 0).astype(arr.dtype)
+        rot = _rotate(part, root, phase * TAIL_ANGLE)
+        base = tail & (cols <= rear + 3)  # la racine ne bouge pas : pas de trou entre la croupe et la queue
+        body, keep = body.copy(), keep.copy()
+        body[tail], keep[tail] = 0, 0
+        body = np.where(rot[..., 3:] > 0, rot, body)
+        body[base] = arr[base]
+    body_a = body[..., 3] > 0
+    # (38) plusieurs têtes : chaque morceau du haut bouge à son rythme
+    if g.get("heads", 1) >= 2:
+        crown = body_a & (rows < y0 + h * .4)
+        lab, n = ndimage.label(crown, structure=np.ones((3, 3)))
+        sizes = ndimage.sum(crown, lab, range(1, n + 1))
+        heads = [k + 1 for k, v in enumerate(sizes) if v >= crown.sum() * .1]
+        if len(heads) >= 2:
+            for i, k in enumerate(heads):
+                sgn = 1 if i % 2 else -1
+                body = _move(body, lab == k, sgn * round(phase) if full else 0, sgn if half and phase > 0 else -sgn if half else 0)
+            return body, keep
+    # (2) la tête plonge à l'appui : devant les pattes avant (à quatre pattes) ou le haut du corps (debout)
+    nod = g.get("nod", 0) if full else 0
+    if nod:
+        head = body_a & (cols < front - 1) if w > h * .9 else body_a & (rows < y0 + h * .28)
+        if head.sum() >= body_a.sum() * .04:
+            body = _move(body, head, -1 if w > h * .9 and nod > 1 else 0, nod)
+    # (36) oreilles, crête, antennes : elles traînent d'un pixel au demi-pas, quand le corps repart
+    if half:
+        crest = (body[..., 3] > 0) & (rows < y0 + round(h * .14) + nod)
+        body = _move(body, crest, 1, 0)
+    return body, keep
+
+
+def _is_leg(m):
+    ys, xs = np.nonzero(m)
+    return len(xs) > 0 and np.ptp(xs) + 1 <= 1.6 * (np.ptp(ys) + 1) + 2
+
+
+def _rotate(leg, pivot, deg):
+    """La patte (RGBA, fond transparent) tournée d'un bloc autour de pivot, au plus proche voisin (pixels nets).
+    deg > 0 : le pied part vers la gauche (l'avant, de profil tête à gauche)."""
+    if not deg:
+        return leg.copy()
+    a = np.radians(deg)
+    H, W = leg.shape[:2]
+    ys, xs = np.nonzero(leg[..., 3])
+    out = np.zeros_like(leg)
+    if not len(xs):
+        return out
+    # seulement autour du pivot : une rotation garde les distances, rien n'arrive plus loin que le pixel le plus éloigné
+    r = int(np.ceil(np.hypot(xs + .5 - pivot[0], ys + .5 - pivot[1]).max())) + 2
+    X0, Y0 = max(0, int(pivot[0]) - r), max(0, int(pivot[1]) - r)
+    yy, xx = np.mgrid[Y0:min(H, int(pivot[1]) + r + 1), X0:min(W, int(pivot[0]) + r + 1)]
+    dx, dy = xx + .5 - pivot[0], yy + .5 - pivot[1]
+    # inverse : pour chaque pixel d'arrivée, le pixel de départ
+    sx = np.floor(dx * np.cos(a) + dy * np.sin(a) + pivot[0]).astype(int)
+    sy = np.floor(-dx * np.sin(a) + dy * np.cos(a) + pivot[1]).astype(int)
+    ok = (sx >= 0) & (sx < W) & (sy >= 0) & (sy < H)
+    out[yy[ok], xx[ok]] = leg[sy[ok], sx[ok]]
+    return out
+
+
+def _attach(masks, arr, top, reach=6):
+    """Les bouts de patte oubliés (un contour, une griffe) suivent la patte la plus proche à reach px au plus : ils ne
+    restent plus sur place en double quand la patte bouge. Plus loin, c'est le ventre : il ne bouge pas."""
+    if not masks:
+        return masks
+    a = arr[..., 3] >= 128
+    a[:top] = False
+    taken = np.zeros_like(a)
+    for m in masks:
+        taken |= m
+    free = a & ~taken
+    if not free.any():
+        return masks
+    owner = np.zeros(a.shape, int)
+    for k, m in enumerate(masks):
+        owner[m] = k + 1
+    dist, (iy, ix) = ndimage.distance_transform_edt(~taken, return_indices=True)
+    near = free & (dist <= reach)
+    out = [m.copy() for m in masks]
+    who = owner[iy, ix]
+    for k in range(len(masks)):
+        out[k] |= near & (who == k + 1)
+    return out
+
+
+def _squash(leg, top, s):
+    """La patte raccourcie vers sa hanche (ligne top) : s < 1, vue en raccourci, le pied remonte."""
+    out = np.zeros_like(leg)
+    ys = np.arange(top, leg.shape[0])
+    src = np.round(top + (ys - top) / s).astype(int)
+    ok = src < leg.shape[0]
+    out[ys[ok]] = leg[src[ok]]
+    return out
+
+
+def _walk_check():
+    leg = np.zeros((20, 20, 4), np.uint8)
+    leg[5:15, 10, :] = 255  # une patte verticale, hanche en (10.5, 5)
+    r = _rotate(leg, (10.5, 5), 30)
+    ys, xs = np.nonzero(r[..., 3])
+    assert xs[ys.argmax()] < 10 and r[..., 3].astype(bool).sum() >= 8, "_rotate : le pied part vers l'avant, la patte reste entière"
+    m = np.zeros((20, 20), bool)
+    m[10:15, 5] = True
+    arr = np.zeros((20, 20, 4), np.uint8)
+    arr[10:15, 5:7, 3] = 255
+    arr[10:12, 14:19, 3] = 255  # à 9 px : le ventre
+    got = _attach([m], arr, 10)[0]
+    assert got[10, 6] and not got[10, 16], "_attach : le contour suit la patte, le loin reste au corps"
+    assert _measure("1,5 m", {"m": 1, "cm": .01}) == 1.5 and _measure("40 cm", {"m": 1, "cm": .01}) == .4
+    assert gait("un grand loup")["kind"] == "felin" and gait("x", lore={"poids": "2 tonnes"})["kind"] == "lourd"
+    z = np.zeros((5, 5, 4), np.uint8)
+    z[1, 1] = 255
+    assert _shift(z, 2, 1)[2, 3, 3] == 255 and _shift(z, -2, 0)[1, 4, 3] == 0
+    tail = np.zeros((20, 30), bool)
+    tail[15:18, 2:28] = True
+    assert _is_leg(m) and not _is_leg(tail), "_is_leg : une queue couchée n'est pas une patte"
+    # deux pattes séparées, qui se croisent 3 lignes près du sol : la zone des pattes remonte jusqu'au ventre
+    im = Image.new("RGBA", (64, 64))
+    im.paste((90, 90, 90, 255), (10, 10, 54, 40))  # le corps
+    for x in (14, 40):
+        im.paste((90, 90, 90, 255), (x, 40, x + 6, 64))
+    im.paste((90, 90, 90, 255), (14, 54, 46, 57))
+    assert leg_zone(im)[0] <= 41, ("leg_zone : les pattes entières", leg_zone(im)[0])
+    sq = _squash(leg, 5, .8)
+    assert np.nonzero(sq[..., 3])[0].max() < 14 and np.nonzero(sq[..., 3])[0].min() == 5, "_squash : le pied remonte, la hanche reste"
+
+
+_walk_check()
 
 
 def _rows(im, shift):
@@ -868,48 +1165,75 @@ def _cols(im, shift):
     return out
 
 
-def wave(im, direction, phase, amp=.04, waves=1.5, crawl=True):
-    """Ondulation (serpent, ver, poisson) : une vague parcourt le corps, nulle à la tête, ample vers la queue.
-    Face / dos : balancement de gauche à droite ; profil (tête à gauche) : le corps ondule de haut en bas."""
+# ------------------------------------------------------------------ ondulation (refaite en 1.10.0)
+# Une vraie vague qui voyage le long du corps : 4 images distinctes, lues en boucle (TRAVEL_CYCLE), au lieu de 5 images
+# lues en aller-retour où la vague ne faisait que monter et descendre sur place. phase (1, .5, -.5, -1) -> instant t.
+TRAVEL_T = {1: 0., .5: .25, -.5: .5, -1: .75}
+WALK_CYCLE = ["repos", "mi1", "pas1", "mi1", "repos", "mi2", "pas2", "mi2"]  # les pattes : aller-retour
+TRAVEL_CYCLE = ["pas1", "mi1", "mi2", "pas2"]  # une vague : t = 0, .25, .5, .75, puis on recommence
+
+
+def _travel(f):
+    f.travel = True
+    return f
+
+
+def _t(phase):
+    return TRAVEL_T.get(phase, phase % 1)
+
+
+@_travel
+def wave(im, direction, phase, amp=.05, waves=1.2):
+    """Serpent, ver, chenille. Profil (tête à gauche) : des bosses partent de la queue et remontent jusqu'à la tête, le
+    ventre reste au sol. Face / dos : le corps dessine un S qui file de la tête vers la queue, la tête reste en place."""
     im = im.convert("RGBA")
     box = im.getbbox()
     if not box or not phase:
         return im.copy()
     x0, y0, x1, y1 = box
     w, h = x1 - x0, y1 - y0
-    a = max(2, round(max(w, h) * amp))  # d'après la longueur : un serpent couché est très plat
-    off = phase * math.pi / 2
+    t = _t(phase)
     if direction in ("bas", "haut"):
+        a = max(2, round(w * .12))
+
         def shift(y):
-            t = (y - y0) / max(1, h)
-            ramp = 1 - t if direction == "bas" else t  # la tête est devant : en bas de face, en haut de dos
-            return round(a * ramp * math.sin(2 * math.pi * waves * t + off))
+            v = (y1 - y) / max(1, h) if direction == "bas" else (y - y0) / max(1, h)  # 0 à la tête, 1 au bout de la queue
+            return round(a * v * math.sin(2 * math.pi * (waves * v - t)))
         return _rows(im, shift)
-
-    if crawl:  # une chenille, un serpent vu de côté : de petites bosses avancent de la queue vers la tête, le ventre reste au sol
-        # 1 ou 2 px, jamais d'après la taille : plus haut, la créature avait l'air de gonfler et de dégonfler
-        bump = 1 if h < 40 else 2
-
-        arr = np.asarray(im)
-        out = arr.copy()
-        for x in range(x0, x1):
-            k = round(bump * max(0., math.sin(2 * math.pi * 2 * (x - x0) / max(1, w) - off)))
-            ys = np.nonzero(arr[:, x, 3] >= 128)[0]
-            if not k or not len(ys):
-                continue
-            mid = (ys[0] + ys[-1]) // 2  # le dos monte, le bas de la colonne (le ventre) ne bouge pas
-            out[ys[0] - k:mid - k + 1, x] = arr[ys[0]:mid + 1, x]
-            out[mid - k + 1:mid + 1, x] = arr[mid, x]
-        return Image.fromarray(out, "RGBA")
-
-    def shift(x):
-        t = (x - x0) / max(1, w)
-        return round(a * t * math.sin(2 * math.pi * waves * t + off))
-    return _cols(im, shift)
+    bump = 1 if h < 16 else 2 if h < 40 else 3  # la hauteur d'une bosse, d'après l'épaisseur du corps
+    arr = np.asarray(im)
+    out = arr.copy()
+    for x in range(x0, x1):
+        u = (x - x0) / max(1, w)
+        k = round(bump * max(0., math.sin(2 * math.pi * (waves * 1.5 * u + t))))
+        ys = np.nonzero(arr[:, x, 3] >= 128)[0]
+        if not k or not len(ys) or ys[0] - k < 0:
+            continue
+        mid = (ys[0] + ys[-1]) // 2  # le dos monte, le bas de la colonne (le ventre) ne bouge pas
+        out[ys[0] - k:mid - k + 1, x] = arr[ys[0]:mid + 1, x]
+        out[mid - k + 1:mid + 1, x] = arr[mid, x]
+    return Image.fromarray(out, "RGBA")
 
 
+@_travel
 def swim(im, direction, phase):
-    return wave(im, direction, phase, amp=.03, waves=.75, crawl=False)  # un poisson ondule librement, il ne touche pas le sol
+    """Poisson : la tête reste, la vague grandit vers la nageoire de queue et file de la tête vers la queue."""
+    im = im.convert("RGBA")
+    box = im.getbbox()
+    if not box or not phase:
+        return im.copy()
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    t = _t(phase)
+    if direction in ("bas", "haut"):
+        a = max(2, round(w * .1))
+
+        def shift(y):
+            v = (y1 - y) / max(1, h) if direction == "bas" else (y - y0) / max(1, h)
+            return round(a * v ** 1.5 * math.sin(2 * math.pi * (.8 * v - t)))
+        return _rows(im, shift)
+    a = max(2, round(max(w, h) * .06))
+    return _cols(im, lambda x: round(a * ((x - x0) / max(1, w)) ** 1.5 * math.sin(2 * math.pi * (.8 * (x - x0) / max(1, w) - t))))
 
 
 def _rescale(im, sx, sy):
@@ -979,14 +1303,74 @@ def still(im, direction, phase):
     return im.copy()
 
 
+@_travel
+def drift(im, direction, phase):
+    """Elle flotte : le bas (tentacules, queue, voile) ondule, la vague descend jusqu'au bout ; (6) le haut se balance
+    doucement de l'autre côté, comme suspendu, et le corps respire (il s'étire un peu puis se tasse).
+    Le lent va-et-vient vertical reste joué à l'affichage (arene.json : marche.flotte)."""
+    im = im.convert("RGBA")
+    box = im.getbbox()
+    if not box or not phase:
+        return im.copy()
+    x0, y0, x1, y1 = box
+    mid = y0 + (y1 - y0) * .4
+    a, lean = max(2, round((x1 - x0) * .07)), max(1, round((x1 - x0) * .025))
+    t = _t(phase)
+
+    def shift(y):
+        s = (y - mid) / max(1, y1 - mid)
+        top = round(-lean * math.sin(2 * math.pi * t) * (mid - y) / max(1, mid - y0)) if y < mid else 0
+        return top + (round(a * s ** 1.3 * math.sin(2 * math.pi * (.7 * s - t))) if y > mid else 0)
+    out = _rows(im, shift)
+    breath = round((y1 - y0) * .025 * math.cos(2 * math.pi * t))  # t = 0 : étiré, t = .5 : tassé
+    return _rescale(out, 1, (y1 - y0 + breath) / (y1 - y0)) if breath else out
+
+
+def walk_cycle(description, brief=None):
+    """L'ordre de lecture de la marche (arene.json : marche.ordre)."""
+    return TRAVEL_CYCLE if getattr(motion(description, brief), "travel", False) else WALK_CYCLE
+
+
+def tidy(frame, rest):
+    """Les miettes nées du calcul (3 px au plus, posées là où la pose de repos est vide) sont effacées."""
+    a = np.asarray(frame)
+    on = a[..., 3] >= 128
+    lab, n = ndimage.label(on, structure=np.ones((3, 3)))
+    if n < 2:
+        return frame
+    sizes = ndimage.sum(on, lab, range(1, n + 1))
+    was = np.asarray(rest)[..., 3] >= 128
+    out = a.copy()
+    for k in np.nonzero(sizes <= 3)[0] + 1:
+        m = lab == k
+        if not (m & was).any():
+            out[m] = 0
+    return Image.fromarray(out, "RGBA")
+
+
+def _drift_check():
+    im = Image.new("RGBA", (64, 64))
+    im.paste((200, 50, 50, 255), (20, 10, 44, 60))
+    f = drift(im, "bas", .5)
+    assert f.getpixel((32, 11))[3] and f.getbbox() != im.getbbox(), "drift : le haut reste en place à 1 px près, le bas ondule"
+    w = [wave(im, "gauche", p) for p in (1, .5, -.5, -1)]
+    assert len({x.tobytes() for x in w}) == 4, "wave : 4 instants distincts (la vague voyage)"
+    crumb = im.copy()
+    crumb.paste((1, 2, 3, 255), (5, 5, 6, 7))  # 2 px détachés du corps
+    assert tidy(crumb, im).getbbox() == im.getbbox() and tidy(crumb, crumb).getbbox() == crumb.getbbox(), "tidy : miettes"
+
+
+_drift_check()
+
+
 def motion(description, brief=None):
     """Le mouvement procédural de la créature, f(image, direction, phase), ou None (elle marche sur ses pattes)."""
     p = (brief or {}).get("posture")
     if floats(description, brief):
-        return still
+        return drift
     if has_wings(description, brief) and (p in FLOATING or not has_legs(description, brief)):
         return flap
-    if p in MOTION:
+    if p in MOTION and not crawls_on_legs(description, brief):
         return MOTION[p]
     if not has_legs(description, brief):
         # le décalage de hover() disparaît quand les sprites sont alignés en bas : il faut une forme qui change
@@ -994,18 +1378,32 @@ def motion(description, brief=None):
     return None
 
 
+assert fix_posture("une créature rampante à quatre pattes", {"posture": "rampe", "pattes": 0}) == {"posture": "quatre_pattes", "pattes": 4}
+assert fix_posture("un ver rampant", {"posture": "rampe", "pattes": 0})["posture"] == "rampe"
+assert motion("un insecte à six pattes qui rampe", {"posture": "rampe"}) is None and motion("un ver", {"posture": "rampe"}) is wave,     "un rampant qui a des pattes marche dessus"
+
 WALK_PHASES = (1, .5, 0, -.5, -1)  # pas A, demi-pas A, repos, demi-pas B, pas B
 
 
-def generate_walk(client, view, direction, description, seed, progress=lambda m: None, cancel=lambda: False, brief=None):
+def generate_walk(client, view, direction, description, seed, progress=lambda m: None, cancel=lambda: False, brief=None,
+                  lore=None):
     """5 images : pas A, demi-pas A, repos, demi-pas B, pas B (lecture repos, ½A, A, ½A, repos, ½B, B, ½B).
     droite : miroir de la marche gauche.
 
     Les pas sont calculés depuis la pose de repos (pas redessinés par le modèle) : les pattes restent nettes et la
     créature identique d'une image à l'autre. Les demi-pas rendent le mouvement fluide. Sans pattes (œil, blob,
     serpent) : rebond, ondulation… selon la posture."""
-    move = motion(description, brief) or step_frame
-    return [view.copy() if not p else move(view, direction, p) for p in WALK_PHASES]
+    move = motion(description, brief)
+    if move is None:  # sur ses pattes, à la façon de son espèce
+        g = gait(description, brief, lore)
+        return [view.copy() if not p else _finish(step_frame(view, direction, p, g), view) for p in WALK_PHASES]
+    return [view.copy() if not p else _finish(move(view, direction, p), view) for p in WALK_PHASES]
+
+
+def _finish(frame, rest):
+    """Une image calculée : sans miettes, avec le même contour que la pose de repos."""
+    import nb_quality
+    return nb_quality.close_outline(tidy(frame, rest), rest)
 
 
 def generate_creature(client, description, seed, progress=lambda m: None, cancel=lambda: False):

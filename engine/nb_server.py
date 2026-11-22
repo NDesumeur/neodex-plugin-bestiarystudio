@@ -9,6 +9,7 @@ import argparse
 import base64
 import io
 import json
+import math
 import os
 import random
 import shutil
@@ -17,6 +18,7 @@ import threading
 import urllib.request
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -27,6 +29,7 @@ import nb_comfy as nbc  # noqa: E402
 import nb_library  # noqa: E402
 import nb_attack  # noqa: E402
 import nb_check  # noqa: E402
+import nb_quality  # noqa: E402
 import nb_anim  # noqa: E402
 import nb_variant  # noqa: E402
 import nb_stats  # noqa: E402
@@ -35,13 +38,30 @@ import nb_make  # noqa: E402
 import nb_moves  # noqa: E402
 
 DIRS = ("bas", "gauche", "droite", "haut")
+QUALITY_V = 2  # la version des règles du contrôle : une note plus ancienne est recalculée
 FRAMES = ("pas1", "repos", "pas2", "mi1", "mi2")  # colonnes de la planche (repos reste en 2e colonne)
 WALK = ("pas1", "mi1", "repos", "mi2", "pas2")  # l'ordre des images rendues par generate_walk
 CYCLE = ["repos", "mi1", "pas1", "mi1", "repos", "mi2", "pas2", "mi2"]  # lecture de la marche
 CELL = 64
 PORTRAIT = 256  # portrait de combat, en pixels
 SKETCHES = 3  # esquisses du design proposées au choix avant le reste
-LAB_DEFAULTS = dict(colors=24, outline=True, outline_color="#0b0b12", lock_palette=True, mirror=True)
+LAB_DEFAULTS = dict(colors=24, outline=True, outline_color="#0b0b12", lock_palette=True, mirror=True, shared_palette=False)
+
+
+def night_item(line):
+    """« Nom : description » (ou seulement la description) ; « [feu] » au début choisit le type."""
+    line = str(line).strip()
+    typ = ""
+    if line.startswith("[") and "]" in line:
+        typ, line = line[1:line.index("]")].strip().lower(), line[line.index("]") + 1:].strip()
+    name, sep, desc = line.partition(":")
+    if not sep or len(name) > 40 or not desc.strip():
+        name, desc = "", line
+    return dict(name=name.strip() or "Créature", description=desc.strip(), type=typ)
+
+
+assert night_item("Ophidrache : un serpent à ailes") == dict(name="Ophidrache", description="un serpent à ailes", type="")
+assert night_item("[feu] Braisou : un renard en braises")["type"] == "feu" and night_item("une pieuvre géante")["name"] == "Créature"
 
 
 def frame_key(d, f):
@@ -56,7 +76,7 @@ def png_bytes(im):
 
 # --------------------------------------------------------------------------- tâches
 
-JOB_NAMES = {"make-objet": "un objet", "make-attaque": "une attaque", "make-musique": "une musique"}
+JOB_NAMES = {"redraw": "un redessin de vues", "make-objet": "un objet", "make-attaque": "une attaque", "make-musique": "une musique"}
 
 
 def busy_text(kind):
@@ -143,6 +163,15 @@ def _signature_sheet(folder, visuel):
     return None
 
 
+def _body_xy(e):
+    """arene.json : cx, cy = où le corps de cette image est posé par rapport à la case de repos (rien si immobile)."""
+    x, y = e.get("body", (0, 0))
+    return {k: v for k, v in (("cx", x), ("cy", y)) if v}
+
+
+assert _body_xy({"body": [-7, 0]}) == {"cx": -7} and _body_xy({}) == {}
+
+
 def _signature_frame(sheet, move, d, i):
     """Une image d'effet 64 px tirée de la planche signature : tournée vers la direction pour ce qui voyage (ligne 1),
     poussée vers la cible pour la frappe et l'impact d'une attaque à distance."""
@@ -203,42 +232,86 @@ class Studio:
         self.lib.save_config(cfg)
         return done
 
+    MOVEMENT = "mouvement1"  # 1.10.0 : pattes entières, démarche de l'espèce, ondulation, gestes d'attaque, attaques qui collent au nom
+
     def upgrade_walk(self):
-        """Une fois : la marche de chaque créature refaite avec chaque patte à part (avant, les pattes avant ou arrière
-        bougeaient d'un bloc) et les rampants qui ne gonflent plus. Une nouvelle version : l'ancienne reste avec ◀ ▶."""
+        """Une fois, en fond, créature par créature : les gestes d'attaque recalculés (même rareté), la marche refaite
+        (une nouvelle version : l'ancienne reste avec ◀ ▶), puis les sprites et les attaques. Reprend où il s'était
+        arrêté si le Studio est fermé en route."""
         cfg = self.lib.load_config({})
-        if cfg.get("marche2"):
+        if cfg.get(self.MOVEMENT) is True:
             return 0
-        done = 0
-        for rec in self.lib.list():
-            slug = rec["slug"]
-            if self.eng.floats(rec.get("description", ""), rec.get("brief")):
-                continue
-            mirror = rec.get("lab", LAB_DEFAULTS).get("mirror", True)
-            for d in ("bas", "haut", "gauche") + (() if mirror else ("droite",)):
-                view = self._active(slug, d)
-                if view is None:
-                    continue
-                src = ImageOps.mirror(view) if d == "droite" else view
-                try:
-                    frames = self.eng.generate_walk(None, src, "gauche" if d == "droite" else d, rec.get("description", ""),
-                                                    rec.get("seed", 0), brief=rec.get("brief"))
-                except Exception as exc:  # une créature qui résiste ne bloque pas les autres
-                    print(f"marche de {slug} ({d}) non refaite : {exc}")
-                    continue
-                frames = [ImageOps.mirror(f) for f in frames] if d == "droite" else frames
-                for f, im in zip(WALK, frames):
-                    if f != "repos":
-                        self.lib.add_pil(slug, frame_key(d, f), im, "marche refaite")
-            if mirror:
-                self._mirror_walk(slug)
-            self.build_sprites(slug)
-            done += 1
-        cfg["marche2"] = 1
+        done_slugs = set(cfg.get(self.MOVEMENT) or [])
+        todo = [rec for rec in self.lib.list() if rec["slug"] not in done_slugs]
+        # les moins bien notées d'abord : ce sont elles qu'on regarde en premier dans Contrôle
+        todo.sort(key=lambda r: (r.get("qualite") or {}).get("note", 0))
+        lock = threading.Lock()
+
+        def one(rec):
+            slug, ok = rec["slug"], 0
+            try:
+                self._fix_brief(slug)
+                self._recard_one(self.lib.load(slug))
+                self._redo_walk(self.lib.load(slug))
+                self.build_sprites(slug)
+                ok = 1
+            except Exception as exc:  # une créature qui résiste ne bloque pas les autres
+                print(f"{slug} : mouvement non refait : {exc}")
+            with lock:
+                done_slugs.add(slug)
+                cfg = self.lib.load_config({})
+                cfg[self.MOVEMENT] = sorted(done_slugs)
+                self.lib.save_config(cfg)
+            return ok
+        # plusieurs à la fois (chacune dans son dossier) ; la moitié des cœurs, pour laisser l'ordinateur respirer
+        with ThreadPoolExecutor(max(1, min(4, (os.cpu_count() or 2) // 2))) as pool:
+            done = sum(pool.map(one, todo))
+        cfg = self.lib.load_config({})
+        cfg[self.MOVEMENT] = True
         self.lib.save_config(cfg)
         if done:
-            print(f"{done} créature(s) : marche refaite")
+            print(f"{done} créature(s) : mouvement refait")
         return done
+
+    def _fix_brief(self, slug):
+        """(4) La posture corrigée d'après les pattes de la description ; le profil, dessiné avec l'ancienne, est à redessiner."""
+        rec = self.lib.load(slug)
+        b = rec.get("brief")
+        if not b:
+            return
+        nb = self.eng.fix_posture(rec.get("description", ""), b)
+        if nb != b:
+            rec["brief"], rec["profil_a_refaire"] = nb, b.get("posture") or True
+            self.lib.save(rec, touch=False)
+
+    def _recard_one(self, rec):
+        """La fiche de combat recalculée avec les règles du jour, à la même rareté (les gestes peuvent changer)."""
+        lore = rec.get("lore") or {}
+        if not lore.get("combat") or rec.get("rarete_fixe") == nb_stats.UNIQUE:
+            return
+        fixed = rec.get("rarete_fixe")
+        rec["rarete_fixe"] = lore["combat"]["rarete"]
+        new = self._card(rec)
+        new["rarete_fixe"], rec["rarete_fixe"] = bool(fixed), fixed
+        lore["combat"] = new
+        self.lib.save(rec)
+
+    def _redo_walk(self, rec):
+        slug = rec["slug"]
+        mirror = rec.get("lab", LAB_DEFAULTS).get("mirror", True)
+        for d in ("bas", "haut", "gauche") + (() if mirror else ("droite",)):
+            view = self._active(slug, d)
+            if view is None:
+                continue
+            src = ImageOps.mirror(view) if d == "droite" else view
+            frames = self.eng.generate_walk(None, src, "gauche" if d == "droite" else d, rec.get("description", ""),
+                                            rec.get("seed", 0), brief=rec.get("brief"), lore=rec.get("lore"))
+            frames = [ImageOps.mirror(f) for f in frames] if d == "droite" else frames
+            for f, im in zip(WALK, frames):
+                if f != "repos":
+                    self.lib.add_pil(slug, frame_key(d, f), im, "marche refaite")
+        if mirror:
+            self._mirror_walk(slug)
 
     def upgrade_float(self):
         """Une fois : les créatures qui flottent (sans ailes) perdent leurs images de marche tassées : la même image partout,
@@ -309,7 +382,7 @@ class Studio:
             n += 1
         return n
 
-    EFFECTS = 2  # 2 : les visuels signés (nb_attack_sig), un par attaque
+    EFFECTS = 2  # 2 : les visuels signés (nb_attack_sig), un par attaque (les gestes de 1.10.0 : upgrade_walk, en fond)
 
     def upgrade_effects(self):
         """Les créatures d'avant les visuels signés : leurs effets d'attaque sont redessinés une fois (corps inchangés)."""
@@ -554,18 +627,43 @@ class Studio:
             return slug
         return self.jobs.start("sketch", run, SKETCHES + 2, slug), slug
 
-    def auto(self, typ=None, theme=None):
+    # ---- 1.10.0 : la file de nuit (tes créatures, une par ligne « Nom : description », faites l'une après l'autre)
+    def _night_path(self):
+        return self.lib.root / "file_de_nuit.json"
+
+    def night(self, text=None):
+        """La file, gardée dans la bibliothèque : survit à une fermeture ; chaque créature finie (ou ratée) en sort."""
+        if text is not None:
+            lines = [ln.strip() for ln in str(text).splitlines() if ln.strip()][:100]
+            self._night_path().write_text(json.dumps(lines, ensure_ascii=False), encoding="utf-8")
+        try:
+            lines = json.loads(self._night_path().read_text(encoding="utf-8"))
+        except Exception:
+            lines = []
+        return dict(lines=lines, items=[night_item(ln) for ln in lines])
+
+    def _night_pop(self):
+        lines = self.night()["lines"]
+        if not lines:
+            return None
+        self.night("\n".join(lines[1:]))
+        return night_item(lines[0])
+
+    def auto(self, typ=None, theme=None, queue=False):
         """Invocation en boucle : une idée au hasard, ses esquisses, la meilleure (vérifiée) choisie toute seule, toute la
-        créature, puis la suivante, jusqu'à /auto-stop (qui laisse finir la créature en cours) ou /cancel (tout de suite)."""
-        self.auto_type, self.auto_theme = typ, theme
+        créature, puis la suivante, jusqu'à /auto-stop (qui laisse finir la créature en cours) ou /cancel (tout de suite).
+        queue : les créatures de la file de nuit à la place des idées au hasard, et la boucle s'arrête quand la file est vide."""
+        if queue and not self.night()["lines"]:
+            raise ValueError("La file de nuit est vide : écris une créature par ligne.")
+        self.auto_type, self.auto_theme, self.auto_queue = typ, theme, bool(queue)
         if self.jobs.get()["running"]:
             raise RuntimeError(busy_text(self.jobs.get()["kind"]))
         self.auto_stop = False
 
         def run(progress, cancel):
             made, fails, last = 0, 0, ""
-            while not cancel() and not self.auto_stop:
-                self.jobs.restart(SKETCHES + 3 + self._rest_steps(""), made=made, slug=last)
+            while not cancel() and not self.auto_stop and not (self.auto_queue and not self.night()["lines"]):
+                self.jobs.restart(SKETCHES + 3 + self._rest_steps(""), made=made, slug=last, left=len(self.night()["lines"]) if self.auto_queue else None)
                 try:
                     last = self._auto_one(progress, cancel, made + 1)
                     made, fails = made + 1, 0
@@ -584,8 +682,13 @@ class Studio:
         progress(f"Créature {n} : idée")
         self._free_gpu()  # la plume a besoin de la carte
         typ = getattr(self, "auto_type", None) if getattr(self, "auto_type", None) in nb_stats.CHART else nb_stats.target_type(self._type_counts())  # le type d'abord (choisi, ou les rares d'abord)
-        theme = getattr(self, "auto_theme", None) if getattr(self, "auto_theme", None) in self.writer.THEMES else random.choice([t for t in self.writer.THEMES if t != "melange"] + ["melange"])
-        idea = self.writer.idea(theme, typ=typ)
+        mine = self._night_pop() if getattr(self, "auto_queue", False) else None  # sortie de la file d'abord : une ligne ratée ne bloque pas la nuit
+        if mine:
+            idea = dict(name=mine["name"], description=mine["description"])
+            typ = mine["type"] if mine["type"] in nb_stats.CHART else typ
+        else:
+            theme = getattr(self, "auto_theme", None) if getattr(self, "auto_theme", None) in self.writer.THEMES else random.choice([t for t in self.writer.THEMES if t != "melange"] + ["melange"])
+            idea = self.writer.idea(theme, typ=typ)
         seed = random.randrange(10 ** 6)
         rec = self.lib.new_record(idea["name"] or "Créature")
         rec.update(slug=self._unique_slug(idea["name"] or "Créature"), description=idea["description"], seed=seed,
@@ -600,7 +703,90 @@ class Studio:
             self.lib.add_pil(slug, "bas", im, f"esquisse {k}{note}")
         best = next((i for i, (_, note) in enumerate(picks) if "✓" in note), 0)  # la première vérifiée
         self.lib.set_active(slug, "bas", best)
-        return self._rest(self.client(), slug, seed + best, tag, cancel)
+        out = self._rest(self.client(), slug, seed + best, tag, cancel)
+        self._auto_fix(slug, tag, cancel)
+        return out
+
+    REDRAWN = {"pattes", "posture", "tailles", "couleurs"}  # ce qu'un redessin avec la carte graphique peut corriger
+
+    def _redraw_view(self, slug, codes):
+        """La vue à redessiner : le profil (pattes, posture), sinon celle (profil ou dos) qui s'écarte le plus de la face."""
+        if codes & {"pattes", "posture"}:
+            return "gauche"
+        sd = self.lib.dir(slug) / "sprites"
+        front = nb_quality._load(sd, "bas_repos")
+
+        def off(d):
+            im = nb_quality._load(sd, f"{d}_repos")
+            if im is None or front is None or not im.getbbox() or not front.getbbox():
+                return -1
+            h = lambda x: x.getbbox()[3] - x.getbbox()[1]
+            return abs(math.log(h(im) / h(front))) + (1 - nb_quality.color_overlap(front, im))
+        return max(("gauche", "haut"), key=off)
+
+    def _auto_fix(self, slug, progress, cancel, force=False):
+        """(6) Une créature passe au contrôle : un profil raté (pas de pattes, pas la même taille ou pas les mêmes couleurs
+        que de face) est redessiné une fois ; la version la mieux notée reste active.
+        force (bouton « Redessiner » de Contrôle) : aussi les pattes qui se touchent et une posture corrigée ; la vue de dos
+        quand c'est elle qui détonne ; ce qui clochait est redit au modèle."""
+        q = self.quality(slug)
+        bad = {p["code"] for p in q["problemes"] if force or p["gravite"] != "leger"} & self.REDRAWN
+        if not bad or cancel():
+            return q
+        rec, brief = self.lib.load(slug), self._brief(slug)
+        d = self._redraw_view(slug, bad)
+        before = self.lib.version_info(rec, d)[0] - 1
+        progress(("profil" if d == "gauche" else "dos") + " redessiné (contrôle : " + ", ".join(sorted(bad)) + ")")
+        c, seed = self.client(), random.randrange(10 ** 6)
+        refs = [self._active(slug, "bas")] + ([self._active(slug, "haut")] if d == "gauche" else [])
+        im = self.eng.generate_view(c, refs, d, seed, progress, cancel, legs=self.eng.has_legs(rec["description"], brief),
+                                    brief=brief, description=rec["description"], fix=sorted(bad) if force else ())
+
+        def use(view):
+            self._store_walk(slug, d, self.eng.generate_walk(c, view, d, rec["description"], seed, progress, cancel,
+                                                             brief=brief, lore=rec.get("lore")))
+            if d == "gauche":
+                self._mirror_walk(slug)
+            self.build_sprites(slug)
+        self.lib.add_pil(slug, d, im, f"contrôle, graine {seed}")
+        if d == "gauche" and rec.get("profil_a_refaire"):  # le nouveau profil suit la posture corrigée
+            r = self.lib.load(slug)
+            r.pop("profil_a_refaire", None)
+            self.lib.save(r, touch=False)
+        use(im)
+        q2 = self.quality(slug)
+        if q2["note"] < q["note"]:  # pas mieux : l'ancienne vue revient (la nouvelle reste dans les versions)
+            self.lib.set_active(slug, d, before)
+            use(self._active(slug, d))
+            return dict(self.quality(slug), mieux=False)
+        return dict(q2, mieux=q2["note"] > q["note"])
+
+    def redraw(self, slugs=None):
+        """(2, 3, 4) Contrôle, « Redessiner » : les vues ratées refaites avec la carte graphique, une créature après l'autre
+        (toutes celles qui en ont besoin, ou la liste donnée). Gardé seulement si la note ne baisse pas."""
+        if self.jobs.get()["running"]:
+            raise RuntimeError(busy_text(self.jobs.get()["kind"]))
+        todo = list(slugs or [c["slug"] for c in self.control() if {p["code"] for p in c["problemes"]} & self.REDRAWN])
+        if not todo:
+            raise ValueError("Aucune vue à redessiner.")
+
+        def run(progress, cancel):
+            better = 0
+            for n, slug in enumerate(todo, 1):
+                if cancel():
+                    break
+                rec = self.lib.load(slug)
+                tag = lambda m, n=n, name=rec["name"] if rec else slug: progress(f"{name} ({n}/{len(todo)}) · {m}")
+                tag("contrôle")
+                try:
+                    better += bool(self._auto_fix(slug, tag, cancel, force=True).get("mieux"))
+                except nbc.ComfyError:
+                    raise
+                except Exception as exc:  # une créature qui résiste ne bloque pas les autres
+                    print(f"{slug} : pas redessinée : {exc}")
+            print(f"redessin : {better} créature(s) mieux notée(s) sur {len(todo)}")
+            return todo[0] if len(todo) == 1 else ""
+        return self.jobs.start("redraw", run, 3 * len(todo), todo[0] if len(todo) == 1 else "")
 
     def _look(self, images):
         """Ce que le modèle de vision voit sur ces images ([] s'il n'y en a pas : on ne contrôle rien)."""
@@ -681,6 +867,7 @@ class Studio:
         except Exception as exc:  # pas d'Ollama : posture devinée par mots-clés
             print("description non analysée :", exc)
             brief = self.eng.guess_brief(rec["description"])
+        brief = self.eng.fix_posture(rec["description"], brief)  # « rampante à quatre pattes » : à quatre pattes
         brief["description"] = rec["description"]
         rec = self.lib.load(slug)
         rec["brief"] = brief
@@ -1042,7 +1229,8 @@ class Studio:
             return rec["lore"]["combat"]  # la créature unique garde sa fiche écrite à la main
         brief = rec.get("brief") or {}
         k = nb_stats.card(rec["slug"], rec["lore"], brief.get("posture", ""), rec.get("rarete_fixe"),
-                          self._prestiges(rec["slug"]), brief.get("anatomie", []))
+                          self._prestiges(rec["slug"]),
+                          brief.get("anatomie", []) + [brief.get("en", ""), brief.get("silhouette", ""), rec.get("description", "")])
         for i, mid in (rec.get("attaques_main") or {}).items():  # les attaques choisies à la main restent
             (tech, extra), i = self._tech(mid), int(i)
             if tech and i < len(k["attaques"]) and not nb_stats.too_rare(tech["element"], tech["genre"], k["rarete"]):
@@ -1206,7 +1394,7 @@ class Studio:
     def _walk(self, c, slug, d, progress, cancel):
         rec = self.lib.load(slug)
         frames = self.eng.generate_walk(c, self._active(slug, d), d, rec["description"], rec["seed"], progress, cancel,
-                                        brief=rec.get("brief"))
+                                        brief=rec.get("brief"), lore=rec.get("lore"))
         self._store_walk(slug, d, frames)
 
     def _store_walk(self, slug, d, frames):
@@ -1226,7 +1414,7 @@ class Studio:
             view = self._active(slug, d)
             src = ImageOps.mirror(view) if d == "droite" else view
             frames = self.eng.generate_walk(None, src, "gauche" if d == "droite" else d, rec.get("description", ""),
-                                            rec.get("seed", 0), brief=rec.get("brief"))
+                                            rec.get("seed", 0), brief=rec.get("brief"), lore=rec.get("lore"))
             frames = [ImageOps.mirror(f) for f in frames] if d == "droite" else frames
             for f, im in zip(WALK, frames):
                 if f in ("mi1", "mi2"):
@@ -1273,10 +1461,10 @@ class Studio:
                     im = ImageOps.mirror(im)
             self.lib.add_pil(slug, d, im, f"graine {seed}")
             if d == "droite":
-                frames = self.eng.generate_walk(c, ImageOps.mirror(im), "gauche", rec["description"], seed, progress, cancel, brief=brief)
+                frames = self.eng.generate_walk(c, ImageOps.mirror(im), "gauche", rec["description"], seed, progress, cancel, brief=brief, lore=rec.get("lore"))
                 frames = [ImageOps.mirror(f) for f in frames]
             else:
-                frames = self.eng.generate_walk(c, im, d, rec["description"], seed, progress, cancel, brief=brief)
+                frames = self.eng.generate_walk(c, im, d, rec["description"], seed, progress, cancel, brief=brief, lore=rec.get("lore"))
             self._store_walk(slug, d, frames)
             if d == "gauche":
                 self._mirror_walk(slug)
@@ -1380,6 +1568,13 @@ class Studio:
         self.build_sprites(slug)
         return self.creature(slug)
 
+    def _walk_ms(self, rec, forms=()):
+        """La cadence de marche dans l'Arène : la démarche de l'espèce, puis la vitesse de la première forme."""
+        if getattr(self.eng.motion(rec.get("description", ""), rec.get("brief")), "travel", False):
+            return 120  # une vague : 4 images par tour
+        stats = next((f["combat"].get("stats", {}) for f in forms if f.get("combat")), {})
+        return self.eng.walk_ms(self.eng.gait(rec.get("description", ""), rec.get("brief"), rec.get("lore")), stats.get("vitesse"))
+
     def creature(self, slug):
         rec = self.lib.load(slug)
         if rec is None:
@@ -1400,6 +1595,7 @@ class Studio:
                     designs=rec.get("views", {}).get("bas", {}).get("files", []), lore=rec.get("lore"), brief=rec.get("brief"),
                     design_notes=rec.get("views", {}).get("bas", {}).get("notes", []),
                     attack_fx=rec.get("attack_fx", {}), timing=list(nb_attack.TIMING),
+                    cycle=self.eng.walk_cycle(rec.get("description", ""), rec.get("brief")), walk_ms=self._walk_ms(rec, self.forms(rec)),
                     anims={n: list(t) for n, t in nb_anim.ANIMS.items()}, variants=rec.get("variants", []),
                     portrait="sprites/portrait.png" if (sd / "portrait.png").is_file() else None,
                     portrait_version=self.lib.version_info(rec, "portrait")[:2], parents=rec.get("parents", []),
@@ -1422,9 +1618,47 @@ class Studio:
             lore = rec.get("lore") or {}
             out.append(dict(slug=rec["slug"], name=rec["name"], updated=rec.get("updated", 0), versions=nv, kind="creature",
                             rarete=(lore.get("combat") or {}).get("rarete"), type=lore.get("type"),
+                            note=(rec.get("qualite") or {}).get("note"),
                             thumb="sprites/bas_repos.png" if (sd / "bas_repos.png").is_file()
                             else (rec.get("views", {}).get("bas", {}).get("files") or [None])[0]))  # esquisse à choisir
         return out
+
+    # ---- 1.10.0 : le contrôle (note de 1 à 5, ce qui cloche) ; gardé dans la fiche tant que les sprites ne changent pas
+    def quality(self, slug, rec=None):
+        rec = rec or self.lib.load(slug)
+        sd = self.lib.dir(slug) / "sprites"
+        stamp = max((p.stat().st_mtime for p in (sd / "sheet.png", sd / "attaque1.png") if p.is_file()), default=0)
+        q = rec.get("qualite")
+        if not q or q.get("t") != stamp or q.get("v") != QUALITY_V:
+            q = nb_quality.check(sd, rec, legs=self.eng.has_legs(rec.get("description", ""), rec.get("brief")),
+                                 engine=None if self.fake else self.eng)
+            q.update(t=stamp, v=QUALITY_V)
+            rec["qualite"] = q
+            self.lib.save(rec, touch=False)
+        return q
+
+    def control(self):
+        """La page Contrôle : chaque créature finie, sa note et ce qui cloche, les plus mal notées d'abord."""
+        out = []
+        for rec in self.lib.list():
+            sd = self.lib.dir(rec["slug"]) / "sprites"
+            if "seed" not in rec or not (sd / "bas_repos.png").is_file():
+                continue
+            q = self.quality(rec["slug"], rec)
+            out.append(dict(slug=rec["slug"], name=rec["name"], note=q["note"], problemes=q["problemes"], mesures=q["mesures"],
+                            cycle=self.eng.walk_cycle(rec.get("description", ""), rec.get("brief")),
+                            sheet="sprites/sheet.png" if (sd / "sheet.png").is_file() else None))
+        return sorted(out, key=lambda c: (c["note"], c["name"]))
+
+    def redo_motion(self, slug):
+        """Refaire une créature (bouton de la page Contrôle) : gestes d'attaque, marche, sprites et attaques ; sans GPU."""
+        rec = self.lib.load(slug)
+        if rec is None:
+            raise ValueError("Créature introuvable.")
+        self._recard_one(rec)
+        self._redo_walk(self.lib.load(slug))
+        self.build_sprites(slug)
+        return dict(slug=slug, **self.quality(slug))
 
     def delete(self, slug):
         """Mise à la corbeille de la bibliothèque (récupérable à la main), pas d'effacement."""
@@ -1437,6 +1671,29 @@ class Studio:
         return dict(ok=True)
 
     # ------------------------------------------------------------- sprite lab
+    # ---- 1.10.0 : la palette commune (le « style de référence ») : les couleurs de 1 à 3 créatures que tu aimes, imposées aux suivantes
+    def shared_palette(self, add=None, clear=False):
+        f = self.lib.root / "palette_commune.json"
+        try:
+            cur = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            cur = dict(palette=[], refs=[])
+        if clear:
+            f.unlink(missing_ok=True)
+            return dict(palette=[], refs=[])
+        if add:
+            refs = ([r for r in cur.get("refs", []) if r != add] + [add])[-3:]
+            pal = []
+            for s in refs:
+                p = self.lib.sprites_dir(s) / "bas_repos.png"
+                if p.exists():
+                    pal += [c for c in sp.extract_palette(Image.open(p), 24) if c not in pal]
+            if not pal:
+                raise ValueError("Cette créature n'a pas encore ses images.")
+            cur = dict(palette=pal[:64], refs=refs)
+            f.write_text(json.dumps(cur, ensure_ascii=False), encoding="utf-8")
+        return cur
+
     def set_lab(self, slug, opts):
         rec = self.lib.load(slug)
         lab = dict(LAB_DEFAULTS)
@@ -1470,6 +1727,9 @@ class Studio:
             return self.creature(slug)
         opts = dict(width=CELL, height=CELL, colors=int(lab["colors"]), outline=bool(lab["outline"]),
                     outline_color=lab["outline_color"], align="Bas", margin=1, bg_remove=False)
+        shared = self.shared_palette()["palette"] if lab.get("shared_palette") else []
+        if shared:  # la palette commune remplace celle de la créature : chaque couleur va vers la plus proche
+            opts.update(palette=shared, palette_mode="Couleur la plus proche")
         sprites = sp.run_batch(items, opts, master_key="bas_repos", lock_palette=bool(lab["lock_palette"]))
         sd = self.lib.sprites_dir(slug)
         for k, im in sprites:
@@ -1486,6 +1746,7 @@ class Studio:
         self._pixel_portrait(slug)
         self._pixel_illustration(slug)
         self.build_attacks(slug)
+        self.quality(slug)  # la note des mouvements, à jour dans la bibliothèque
         return self.creature(slug)
 
     def _moves(self, rec):
@@ -1504,6 +1765,8 @@ class Studio:
                         sheets[name].paste(im, (i * CELL, row * CELL))
         for name, sheet in sheets.items():
             sheet.save(folder / f"{name}.png")
+        front = folder / "bas_repos.png"  # la couleur de la créature teinte ses effets (la même dans les 4 directions)
+        tint = nb_attack.dominant(Image.open(front)) if front.is_file() else None
         for n, move in enumerate(moves, 1):
             body_sheet = Image.new("RGBA", (CELL * nb_attack.FRAMES, CELL * len(DIRS)))
             fx_sheet = Image.new("RGBA", (CELL * nb_attack.FRAMES, CELL * len(DIRS)))
@@ -1513,7 +1776,7 @@ class Studio:
                 if not rest.is_file():
                     continue
                 frames = nb_attack.attack(Image.open(rest).convert("RGBA"), d, move["genre"], move["element"], legs,
-                                          move.get("visuel"))
+                                          move.get("visuel"), name=move.get("nom", ""), tint=tint)
                 sig = _signature_sheet(folder, move.get("visuel"))
                 if sig is not None:  # une attaque signature : ses effets viennent de sa grande planche (les mêmes que dans l'Arène)
                     for i, f in enumerate(frames):
@@ -1527,7 +1790,7 @@ class Studio:
                         fx_sheet.paste(f["effect"], (i * CELL, row * CELL))
                     else:
                         (folder / f"effet{n}_{d}_{i}.png").unlink(missing_ok=True)
-                    fx[str(n)][d].append(dict(offset=list(f["offset"]), effect=f["effect"] is not None))
+                    fx[str(n)][d].append(dict(offset=list(f["offset"]), effect=f["effect"] is not None, body=list(f.get("body_offset", (0, 0)))))
             body_sheet.save(folder / f"attaque{n}.png")
             fx_sheet.save(folder / f"effet{n}.png")
         return fx
@@ -1615,13 +1878,14 @@ class Studio:
         meta = dict(
             format=1, slug=slug, nom=rec["name"], type=lore.get("type"), espece=lore.get("espece"),
             description=lore.get("description", ""), mis_a_jour=rec.get("updated", 0), case=CELL, directions=list(DIRS),
-            marche=dict(image="sheet.png", images=list(FRAMES), ordre=CYCLE, ms=90,
+            marche=dict(image="sheet.png", images=list(FRAMES), ordre=self.eng.walk_cycle(rec.get("description", ""), rec.get("brief")),
+                        ms=self._walk_ms(rec, forms),
                         **({"flotte": True} if self.eng.floats(rec.get("description", ""), rec.get("brief")) else {})),
             animations={n: dict(image=f"{n}.png", ms=list(t)) for n, t in nb_anim.ANIMS.items()},
             portrait=(sd / "portrait.png").is_file(), **({"numero": rec["numero"]} if "numero" in rec else {}),
             formes=[dict(id=f["id"], nom=f["nom"], dossier=f["dossier"], combat=f["combat"],
                          attaques=[dict(a, image=f"attaque{n}.png", effet=f"effet{n}.png", ms=list(nb_attack.TIMING),
-                                        decalages={d: [dict(x=e["offset"][0], y=e["offset"][1], visible=e["effect"])
+                                        decalages={d: [dict(x=e["offset"][0], y=e["offset"][1], visible=e["effect"], **_body_xy(e))
                                                        for e in fr] for d, fr in f["fx"].get(str(n), {}).items()})
                                    for n, a in enumerate(f["combat"]["attaques"], 1)])
                     for f in forms])
@@ -1666,11 +1930,13 @@ class Studio:
         sheet.save(out / f"{base}.png")
         meta = dict(
             name=rec["name"], image=f"{base}.png", frame_width=CELL, frame_height=CELL,
-            columns=len(FRAMES), rows=len(DIRS), anchor=[CELL // 2, CELL - 2], fps=11,
-            animation=CYCLE,
+            columns=len(FRAMES), rows=len(DIRS), anchor=[CELL // 2, CELL - 2],
+            fps=round(1000 / self._walk_ms(rec, self.forms(rec))),  # la démarche de l'espèce, comme dans l'Arène
+            animation=self.eng.walk_cycle(rec.get("description", ""), rec.get("brief")),
             directions={d: dict(row=r, frames={f: dict(x=c * CELL, y=r * CELL) for c, f in enumerate(FRAMES)})
                         for r, d in enumerate(DIRS)},
             description=rec.get("description", ""), seed=rec.get("seed"), fiche=rec.get("lore"),
+            posture=(rec.get("brief") or {}).get("posture", ""),  # pour les jeux qui la lisent (Cartes, Catacombes : leur « plan »)
             portrait="portrait.png", attaques=[],
         )
         sd = self.lib.sprites_dir(slug)
@@ -1684,7 +1950,7 @@ class Studio:
             meta["attaques"].append(dict(
                 move, image=f"{base}_attaque{n}.png", effet_image=f"{base}_effet{n}.png", timing_ms=list(nb_attack.TIMING),
                 directions={d: dict(row=r, frames=[dict(x=i * CELL, y=r * CELL, effet=f["effect"],
-                                                        effet_decalage=f["offset"]) for i, f in enumerate(fx[d])])
+                                                        effet_decalage=f["offset"], corps_decalage=f.get("body", [0, 0])) for i, f in enumerate(fx[d])])
                             for r, d in enumerate(DIRS) if d in fx}))
         meta["animations"] = {}
         for name, t in nb_anim.ANIMS.items():  # attente, dégâts, K.O. : 4 directions x 4 images
@@ -1769,6 +2035,7 @@ def make_handler(studio, token):
         "/moves": lambda q: studio.moves(),
         "/catalog-sheet": lambda q: dict(ok=bool(nb_make.catalog_sheet(studio.lib.root, *q.get("id", ":").split(":")[:2]))),
         "/creature": lambda q: studio.creature(q["slug"]),
+        "/control": lambda q: studio.control(),
         "/exports": lambda q: dict(folder=str(studio.exports_dir())),
     }
     routes_post = {
@@ -1776,7 +2043,11 @@ def make_handler(studio, token):
         "/set-types": lambda b: studio.set_types(b["slug"], b.get("types")),
         "/set-attack": lambda b: studio.set_attack(b["slug"], b.get("index", 0), b.get("id")),
         "/cancel": lambda b: studio.jobs.cancel() or dict(ok=True),
-        "/auto": lambda b: dict(job=studio.auto(b.get("type"), b.get("theme"))),
+        "/auto": lambda b: dict(job=studio.auto(b.get("type"), b.get("theme"), b.get("queue"))),
+        "/night": lambda b: studio.night(b.get("text")),
+        "/redo-motion": lambda b: studio.redo_motion(b["slug"]),
+        "/redraw": lambda b: dict(job=studio.redraw(b.get("slugs"))),
+        "/shared-palette": lambda b: studio.shared_palette(b.get("add"), b.get("clear")),
         "/auto-stop": lambda b: setattr(studio, "auto_stop", True) or dict(ok=True),
         "/redo": lambda b: dict(job=studio.redo(b["slug"], b["dir"])),
         "/continue": lambda b: dict(job=studio.finish(b["slug"], b["index"])),

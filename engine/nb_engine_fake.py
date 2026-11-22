@@ -50,7 +50,7 @@ def generate_design(client, description, seed, progress=lambda m: None, cancel=l
 
 
 def generate_view(client, refs, direction, seed, progress=lambda m: None, cancel=lambda: False, legs=False,
-                  brief=None, description=""):
+                  brief=None, description="", fix=()):
     progress(direction)
     return _blob(COLORS[direction], seed)
 
@@ -75,6 +75,11 @@ def generate_edit(client, image, instruction, seed, zone=None, progress=lambda m
 
 
 from nb_engine import orientation_fix, FIX_NOTE  # noqa: E402  (pur texte, sans GPU)
+from nb_engine import gait, walk_ms, WALK_CYCLE, fix_posture  # noqa: E402
+
+
+def walk_cycle(description, brief=None):
+    return WALK_CYCLE
 
 
 def generate_facing(client, direction, refs, seed, progress=lambda m: None, cancel=lambda: False, legs=False, brief=None,
@@ -83,7 +88,8 @@ def generate_facing(client, direction, refs, seed, progress=lambda m: None, canc
     return _blob(COLORS[direction], seed)
 
 
-def generate_walk(client, view, direction, description, seed, progress=lambda m: None, cancel=lambda: False, brief=None):
+def generate_walk(client, view, direction, description, seed, progress=lambda m: None, cancel=lambda: False, brief=None,
+                  lore=None):
     if has_legs(description, brief):
         progress(f"Marche {direction} : pas 1")
         progress(f"Marche {direction} : pas 2")

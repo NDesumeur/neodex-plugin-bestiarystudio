@@ -24,6 +24,7 @@ const HTML = `<link rel="stylesheet" href="${U}ui/studio.css">
     <button class="nbs-tab" data-p="lib" title="Bibliothèque">${ic('biblio')}Bibliothèque</button>
     <button class="nbs-tab" data-p="eq" title="Équilibre">${ic('balance')}Équilibre</button>
     <button class="nbs-tab" data-p="monde" title="Monde">${ic('monde')}Monde</button>
+    <button class="nbs-tab" data-p="ctrl" title="Contrôle">${ic('oeil')}Contrôle</button>
   </nav>
   <main class="nbs-frame">
     <section class="nbs-page" id="p-setup">
@@ -73,6 +74,10 @@ const HTML = `<link rel="stylesheet" href="${U}ui/studio.css">
             <button class="nbs-btn dark sq" id="dice" title="Nouvelle graine">${ic('de')}</button>
             <span class="nbs-hint" id="seedTxt"></span>
           </div>
+          <div class="nbs-sep"></div>
+          <div class="nbs-title">File de nuit</div>
+          <div class="nbs-parch"><textarea id="queue" rows="4" spellcheck="false" placeholder="Une créature par ligne, faites l'une après l'autre (la nuit, par exemple) :&#10;Ophidrache : un serpent à ailes de chauve-souris&#10;[feu] Braisou : un petit renard fait de braises"></textarea></div>
+          <div class="nbs-row"><button class="nbs-btn" id="night" title="Invoque les créatures de la file l'une après l'autre, puis s'arrête">${ic('play')}Lancer la file</button><span class="nbs-hint" id="queueN"></span></div>
           <div class="nbs-sep"></div>
           <div class="nbs-bar"><i id="bar" style="width:0"></i></div>
           <div class="nbs-step" id="step">&nbsp;</div>
@@ -218,6 +223,9 @@ const HTML = `<link rel="stylesheet" href="${U}ui/studio.css">
           <div class="nbs-opt" data-o="outline"><span class="nbs-check"></span>Contour sombre</div>
           <div class="nbs-opt" data-o="lock_palette" style="margin-top:6px"><span class="nbs-check"></span>Palette verrouillée sur les 20 images</div>
           <div class="nbs-opt" data-o="mirror" style="margin-top:6px"><span class="nbs-check"></span>Droite = miroir de gauche</div>
+          <div class="nbs-opt" data-o="shared_palette" style="margin-top:6px" title="Les couleurs de tes créatures de référence, imposées à celle-ci : un style commun à tout le bestiaire"><span class="nbs-check"></span>Palette commune</div>
+          <div class="nbs-row" style="margin-top:6px"><button class="nbs-btn dark" id="palRef" title="Ses couleurs rejoignent la palette commune (3 créatures de référence au plus)">Prendre comme référence</button><button class="nbs-btn dark sq" id="palClear" title="Oublier la palette commune">×</button></div>
+          <div class="nbs-swatches small" id="palSw"></div><div class="nbs-hint" id="palInfo"></div>
           <div class="nbs-opt" style="margin-top:6px">Couleurs <button class="nbs-btn dark sq" id="cminus">-</button><span class="nbs-num" id="cnum">24</span><button class="nbs-btn dark sq" id="cplus">+</button></div>
           <div class="nbs-sep"></div>
           <div class="nbs-row">
@@ -277,6 +285,15 @@ const HTML = `<link rel="stylesheet" href="${U}ui/studio.css">
         </div>
       </div>
     </section>
+    <section class="nbs-page" id="p-ctrl">
+      <div class="nbs-title">Contrôle des mouvements</div>
+      <div class="nbs-row" style="margin-bottom:12px">
+        <span class="nbs-hint" id="ctrlSum">Chaque créature marche ici, avec sa note de 1 à 5 et ce qui cloche. Les moins bien notées d'abord.</span>
+        <button class="nbs-btn sm" id="ctrlRedraw" hidden title="Les profils aux pattes collées ou dessinés avec une mauvaise posture, et les vues qui changent de taille ou de couleurs, redessinés un par un avec la carte graphique. Une nouvelle vue n'est gardée que si la note ne baisse pas.">${ic('refaire')}Redessiner les vues ratées</button>
+      </div>
+      <div class="nbs-lib nbs-ctrl" id="ctrl"></div>
+    </section>
+
     <section class="nbs-page" id="p-eq">
       <div id="eq"><div class="nbs-hint">Lecture du bestiaire…</div></div>
     </section>
@@ -354,6 +371,7 @@ export default async function (ctx) {
     if (p === 'eq') loadBalance();
     if (p === 'lab') loadFrame();
     if (p === 'monde') loadWorld();
+    if (p === 'ctrl') loadCtrl();
   };
   $$('.nbs-tab').forEach(t => t.onclick = () => show(t.dataset.p));
 
@@ -426,6 +444,7 @@ export default async function (ctx) {
     });
     busy(false);
     if (j.error) { out.say(j.error, true); return null; }
+    if (j.kind === 'redraw') { say('Vues redessinées ✓ (les nouvelles notes sont dans Contrôle)'); ctrlStamp = Date.now(); if (S.tab === 'ctrl') loadCtrl(); return j; }
     if (j.kind.startsWith('make-')) { S.moves = null; out.say({ 'make-objet': 'Objet créé ✓', 'make-attaque': 'Attaque créée ✓', 'make-musique': 'Musique composée ✓' }[j.kind]); return j; }
     say(j.kind === 'sketch' ? 'Choisis ton design ↓' : j.kind === 'edit' ? 'Retouche faite ✓ (nouvelle version)'
       : j.kind === 'portrait' ? 'Portrait de combat prêt ✓ (onglet Directions, fiche)'
@@ -553,7 +572,25 @@ export default async function (ctx) {
     try { const b = await (await fetch(src('sprites/bas_repos.png'))).blob(); if (b.size < 380000) image = await new Promise(r => { const f = new FileReader(); f.onload = () => r(f.result); f.onerror = () => r(''); f.readAsDataURL(b); }); } catch {}
     ctx.notifications.send({ type: 'invocation', title: 'Nouvelle créature : ' + S.cr.name, body: (S.cr.description || 'Invocation en boucle').slice(0, 200), image, open: 'plugin:' + ID }).catch(() => {});
   }
-  $('#auto').onclick = async () => {
+  // ------------------------------------------------------------ la file de nuit et la palette commune (1.10.0)
+  let queueT = 0;
+  const queueCount = () => { const n = $('#queue').value.split('\n').filter(l => l.trim()).length; $('#queueN').textContent = n ? `${n} créature${n > 1 ? 's' : ''} dans la file` : ''; };
+  $('#queue').oninput = () => { queueCount(); clearTimeout(queueT); queueT = setTimeout(() => post('/night', { text: $('#queue').value }).catch(() => {}), 500); };
+  post('/night', {}).then(r => { if (!$('#queue').value) { $('#queue').value = r.lines.join('\n'); queueCount(); } }).catch(() => {});
+  $('#night').onclick = async () => {
+    if (S.auto) return $('#auto').onclick();
+    clearTimeout(queueT); await post('/night', { text: $('#queue').value }).catch(() => {});
+    runLoop({ queue: true });
+  };
+  function palShow(p) {
+    $('#palSw').innerHTML = (p.palette || []).map(c => `<i style="background:${c}"></i>`).join('');
+    $('#palInfo').textContent = p.palette?.length ? `${p.palette.length} couleurs, prises sur ${p.refs.length} créature${p.refs.length > 1 ? 's' : ''}` : 'Pas encore de palette commune : prends une créature que tu aimes comme référence.';
+  }
+  post('/shared-palette', {}).then(palShow).catch(() => {});
+  $('#palRef').onclick = () => S.cr && post('/shared-palette', { add: S.cr.slug }).then(p => { palShow(p); say(`Les couleurs de ${S.cr.name} rejoignent la palette commune ✓`); }, e => say(e.message, true));
+  $('#palClear').onclick = () => post('/shared-palette', { clear: true }).then(palShow).catch(() => {});
+  $('#auto').onclick = () => runLoop();
+  async function runLoop(extra = {}) {
     const b = $('#auto');
     if (S.auto) {
       S.auto = 'stop';
@@ -561,7 +598,7 @@ export default async function (ctx) {
       b.disabled = true; b.lastChild.textContent = 'Arrêt après cette créature…';
       return;
     }
-    try { await post('/auto', { type: $('#crType').value, theme: $('#themes .on')?.dataset.t }); } catch (e) { say(e.message, true); return; }
+    try { await post('/auto', { type: $('#crType').value, theme: $('#themes .on')?.dataset.t, ...extra }); } catch (e) { say(e.message, true); return; }
     S.auto = 'on'; $('#go').hidden = true; $('#cancel').hidden = false; $$('.nbs-redo').forEach(x => x.disabled = true);
     b.lastChild.textContent = 'Arrêter la boucle';
     let made = 0;
@@ -569,12 +606,14 @@ export default async function (ctx) {
       $('#bar').style.width = Math.round(j.progress * 100) + '%';
       say(`${S.auto === 'stop' ? 'Dernière créature · ' : ''}${j.step === 'Préparation' ? 'Préparation… (ComfyUI démarre, ~1 min la première fois)' : j.step + '…'} ${Math.round(j.progress * 100)} % · ${j.made || 0} finie${(j.made || 0) > 1 ? 's' : ''}`);
       if ((j.made || 0) > made && j.slug) { made = j.made; open(j.slug).then(notifyMade, () => {}); }
+      if (extra.queue && j.left != null) { const L = $('#queue').value.split('\n').filter(l => l.trim()); if (L.length > j.left) { $('#queue').value = L.slice(L.length - j.left).join('\n'); queueCount(); } }
     });
     S.auto = null; busy(false);
     b.disabled = false; b.lastChild.textContent = 'Invocation en boucle';
     say(j.error ? j.error : `Boucle terminée : ${j.made || made} créature${(j.made || made) > 1 ? 's' : ''} invoquée${(j.made || made) > 1 ? 's' : ''} ✓`, !!j.error);
     if (j.slug) await open(j.slug).catch(() => {});
-  };
+    if (extra.queue) post('/night', {}).then(r => { $('#queue').value = r.lines.join('\n'); queueCount(); }).catch(() => {});
+  }
   $('#stages').innerHTML = DIRS.map((d, i) => `<div class="nbs-stage${i % 3 ? ' path' : ''}"><img class="w" data-d="${d}" alt=""><span class="tag">${ARROW[d]} ${d}</span></div>`).join('');
 
   // ------------------------------------------------------------ inspiration
@@ -745,20 +784,48 @@ export default async function (ctx) {
       ${k.attaques.map((a, i) => `<div class="nbs-move"><div class="nbs-move-t">${i + 1}. ${esc(a.nom)} ${atkRar(k.rarete === '???' ? '???' : a.rarete || S.moves?.find(m => m.id === a.id)?.rarete)}<span class="nbs-chip">${esc(a.element)}</span> <span class="nbs-chip">${GENRE[a.genre] || esc(a.genre)}</span> ${moveExtra(a)} ${msel(a, i)}</div><p class="nbs-read">${esc(a.description)}</p></div>`).join('')}</div>`;
   }
   // ------------------------------------------------------------ attaques animées (corps + calque d'effet)
+  const SFX_EL = { feu: [180, 'sawtooth'], eau: [320, 'sine'], glace: [900, 'triangle'], foudre: [600, 'square'], vent: [500, 'sine'],
+    roche: [90, 'square'], acier: [700, 'square'], insecte: [380, 'sawtooth'], fee: [1000, 'sine'], son: [520, 'sine'], temps: [350, 'triangle'], encre: [140, 'sawtooth'], gravite: [70, 'sine'],
+    plante: [260, 'triangle'], poison: [220, 'sawtooth'], lumiere: [1200, 'sine'], ombre: [110, 'sawtooth'],
+    esprit: [440, 'sine'], normal: [300, 'triangle'] };
+  const SFX_HIT = ['griffe', 'morsure', 'charge', 'corne', 'dard', 'fouet', 'etreinte'];
+  let audio;
+  function sfx(genre, element, strong) {
+    try {
+      audio = audio || new AudioContext();
+      const a = audio, now = a.currentTime, key = String(element || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().split(' ')[0];
+      const [f0, wave] = SFX_EL[key] || SFX_EL.normal, vol = a.createGain(), len = SFX_HIT.includes(genre) ? .18 : genre === 'cri' ? .5 : .35;
+      vol.gain.setValueAtTime(strong ? .5 : .32, now); vol.gain.exponentialRampToValueAtTime(.001, now + len); vol.connect(a.destination);
+      if (SFX_HIT.includes(genre) || genre === 'explosion' || genre === 'pluie' || genre === 'onde') {  // un choc : du bruit filtré
+        const n = a.createBufferSource(), buf = a.createBuffer(1, a.sampleRate * len, a.sampleRate), d = buf.getChannelData(0);
+        for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length) ** (genre === 'griffe' ? 3 : 1.5);
+        const flt = a.createBiquadFilter(); flt.type = genre === 'griffe' || genre === 'dard' ? 'highpass' : 'lowpass';
+        flt.frequency.value = genre === 'explosion' || genre === 'onde' ? 400 : f0 * 4; n.buffer = buf; n.connect(flt).connect(vol); n.start(now);
+      }
+      if (!SFX_HIT.includes(genre) || genre === 'morsure') {  // un ton : il glisse (rayon, souffle) ou vibre (cri)
+        const o = a.createOscillator(); o.type = wave; o.frequency.setValueAtTime(f0 * (genre === 'rayon' ? 2 : 1), now);
+        o.frequency.exponentialRampToValueAtTime(Math.max(40, f0 * (genre === 'soin' || genre === 'renfort' ? 2 : .5)), now + len);
+        if (genre === 'cri') { const l = a.createOscillator(), lg = a.createGain(); l.frequency.value = 18; lg.gain.value = f0 * .2; l.connect(lg).connect(o.frequency); l.start(now); l.stop(now + len); }
+        o.connect(vol); o.start(now); o.stop(now + len);
+      }
+    } catch {}
+  }
   const imgCache = {};
   const pic = url => { if (!imgCache[url]) { const im = new Image(); im.src = url; imgCache[url] = im; } return imgCache[url]; };
   const atkMoves = () => form().combat?.attaques || [];
   function atkFrame(n, d, i) {
     const F = form(), fx = F.fx?.[n]?.[d]?.[i];
     if (!fx) return null;
-    return { body: src(`${F.dossier}attaque${n}_${d}_${i}.png`), fx: fx.effect ? src(`${F.dossier}effet${n}_${d}_${i}.png`) : null, off: fx.offset };
+    return { body: src(`${F.dossier}attaque${n}_${d}_${i}.png`), fx: fx.effect ? src(`${F.dossier}effet${n}_${d}_${i}.png`) : null, off: fx.offset, bo: fx.body || [0, 0] };  // bo : le corps bondit
   }
   function renderAttacks() {
     const box = $('#attacks'), moves = atkMoves();
     if (!S.cr || !moves.length || !form().fx?.['1']) { box.innerHTML = '<div class="nbs-hint">Les attaques arrivent avec la fiche du bestiaire.</div>'; return; }
     box.innerHTML = moves.map((a, k) => `<div class="nbs-atk"><div class="nbs-atk-t">${k + 1}. ${esc(a.nom)} <span class="nbs-hint">· ${esc(a.element)} · ${GENRE[a.genre] || esc(a.genre)}</span></div>
       <div class="nbs-atk-row">${sigOf(a) || a.cree && a.show ? `<canvas width="320" height="180" class="nbs-sig-cv nbs-well" data-n="${k + 1}" data-v="${sigOf(a)}" data-cree="${a.cree && a.show ? k : ''}" title="Comme dans l'Arène"></canvas>`
-        : DIRS.map(d => `<canvas width="192" height="192" class="nbs-atk-cv nbs-well" data-n="${k + 1}" data-d="${d}"></canvas>`).join('')}</div></div>`).join('');
+        : DIRS.map(d => `<canvas width="192" height="192" class="nbs-atk-cv nbs-well" data-n="${k + 1}" data-d="${d}"></canvas>`).join('')
+        + `<canvas width="320" height="150" class="nbs-stage-cv nbs-well" data-n="${k + 1}" title="Comme dans l'Arène (clic : le son)"></canvas>`}</div></div>`).join('');
+    $$('#attacks .nbs-stage-cv').forEach(cv => cv.onclick = () => { cv.dataset.t0 = S.tick; const a = atkMoves()[cv.dataset.n - 1]; setTimeout(() => sfx(a?.genre, a?.element), 220); });
     if (box.querySelector('.nbs-sig-cv')) sigLoop();
   }
   /* NeoMe (n° 0) a ses attaques signature (dossier signature/ : planches de 10 images de 128 px, une ligne par temps : lancer, trajet, impact).
@@ -823,11 +890,27 @@ export default async function (ctx) {
     const step = now => { const cvs = $$('.nbs-sig-cv'); if (!cvs.length || !view.isConnected) { S.sigRun = false; return; } if (S.tab === 'dirs') cvs.forEach(cv => sigDraw(cv, now)); requestAnimationFrame(step); };
     requestAnimationFrame(step);
   }
+  function drawStage(cv, n, tick) {
+    const p = (tick - (+cv.dataset.t0 || 0)) % 16, g = cv.getContext('2d'), GROUND = 132, A = 52, T = 204, F = form();
+    const hit = p >= 2 && p <= 4, f = p < 4 ? atkFrame(n, 'droite', p) : null;
+    g.imageSmoothingEnabled = false; g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, 320, 150);
+    if (p === 2 || p === 3) g.translate(p === 2 ? 2 : -2, p === 2 ? -1 : 1);  // l'écran tremble au coup
+    for (const x of [A + 32, T + 32]) { g.fillStyle = 'rgba(0,0,0,.3)'; g.beginPath(); g.ellipse(x, GROUND, 20, 4, 0, 0, 7); g.fill(); }
+    const tg = pic(src(F.dossier + 'gauche_repos.png')), back = p === 2 ? 6 : p === 3 ? 4 : p === 4 ? 2 : 0;
+    if (tg.complete) {
+      g.drawImage(tg, T + back, GROUND - 62);
+      if (p === 2 || p === 3) { g.save(); g.globalAlpha = p === 2 ? .85 : .45; g.filter = 'brightness(0) invert(1)'; g.drawImage(tg, T + back, GROUND - 62); g.restore(); }  // l'éclair blanc
+    }
+    const body = pic(f ? f.body : src(F.dossier + 'droite_repos.png')), bo = f ? f.bo : [0, 0];
+    if (body.complete) g.drawImage(body, A + bo[0], GROUND - 62 + bo[1]);
+    if (f?.fx) { const e = pic(f.fx); if (e.complete) g.drawImage(e, A + f.off[0], GROUND - 62 + f.off[1]); }
+    if (hit && p === 2) { g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = 'rgba(255,255,255,.12)'; g.fillRect(0, 0, 320, 150); }
+  }
   function drawAttack(cv, n, d, i) {
     const f = atkFrame(n, d, i), g = cv.getContext('2d');
     g.imageSmoothingEnabled = false; g.clearRect(0, 0, 192, 192);
     if (!f) return;
-    const b = pic(f.body); if (b.complete) g.drawImage(b, 64, 64);
+    const b = pic(f.body); if (b.complete) g.drawImage(b, 64 + f.bo[0], 64 + f.bo[1]);
     if (f.fx) { const e = pic(f.fx); if (e.complete) g.drawImage(e, 64 + f.off[0], 64 + f.off[1]); }
   }
   // ------------------------------------------------------------ animations de combat (planches : une ligne par direction)
@@ -1035,15 +1118,17 @@ export default async function (ctx) {
     tick++;
     const floats = S.cr?.brief?.posture === 'flotte';  // elle flotte : un va-et-vient en CSS, ses images ne changent pas
     if (S.cr) $$('img.w, #hero').forEach(i => i.classList.toggle('nbs-float', floats));
-    if (S.cr) $$('img.w').forEach(i => { const s = sprite(i.dataset.d, CYCLE[tick % CYCLE.length]); if (i.getAttribute('src') !== s) i.src = s; i.style.visibility = s ? '' : 'hidden'; });
-    if (S.cr && S.tab === 'dirs') { $$('.nbs-atk-cv').forEach(cv => drawAttack(cv, cv.dataset.n, cv.dataset.d, Math.min(3, tick % 7))); drawAnims(); }
+    if (S.cr) $$('img.w').forEach(i => { const s = sprite(i.dataset.d, (S.cr?.cycle || CYCLE)[tick % (S.cr?.cycle || CYCLE).length]); if (i.getAttribute('src') !== s) i.src = s; i.style.visibility = s ? '' : 'hidden'; });
+    if (S.tab === 'ctrl') drawCtrl(tick);
+    S.tick = tick;
+    if (S.cr && S.tab === 'dirs') { $$('.nbs-stage-cv').forEach(cv => drawStage(cv, cv.dataset.n, tick)); $$('.nbs-atk-cv').forEach(cv => drawAttack(cv, cv.dataset.n, cv.dataset.d, Math.min(3, tick % 7))); drawAnims(); }
     if (S.tab !== 'lab' || !S.cr) return;
     const fxImg = $('#heroFx');
     if (hero.atk) {  // une attaque en cours : ses 4 images, puis retour à la marche
       const f = atkFrame(hero.atk, hero.d, hero.atkI++);
       if (f) {
         const h = $('#hero');
-        h.src = f.body; h.style.left = hero.x + 'px'; h.style.top = hero.y + 'px';
+        h.src = f.body; h.style.left = hero.x + f.bo[0] * 2 + 'px'; h.style.top = hero.y + f.bo[1] * 2 + 'px';
         fxImg.hidden = !f.fx;
         if (f.fx) { fxImg.src = f.fx; fxImg.style.left = hero.x + f.off[0] * 2 + 'px'; fxImg.style.top = hero.y + f.off[1] * 2 + 'px'; }
         return;
@@ -1058,7 +1143,7 @@ export default async function (ctx) {
       hero.x = Math.max(-32, Math.min(world.clientWidth - 96, hero.x + dx * 6));
       hero.y = Math.max(-32, Math.min(world.clientHeight - 96, hero.y + dy * 6));
     } else hero.step = 0;
-    const h = $('#hero'), s = sprite(hero.d, CYCLE[hero.step % CYCLE.length]);
+    const h = $('#hero'), s = sprite(hero.d, (S.cr?.cycle || CYCLE)[hero.step % (S.cr?.cycle || CYCLE).length]);
     if (h.getAttribute('src') !== s) h.src = s;
     h.style.left = hero.x + 'px'; h.style.top = hero.y + 'px';
   }, 110);
@@ -1230,10 +1315,59 @@ export default async function (ctx) {
   }
   function cardMeta(c) {
     const r = c.rarete ? `<span class="nbs-rare r${RAR.indexOf(c.rarete)}">${esc(c.rarete)}</span>` : '';
-    if (S.libKind === 'creature') return r + String(c.type || '').split(' et ').filter(Boolean).map(t => `<span class="nbs-chip">${esc(t)}</span>`).join('') || `${c.versions} version${c.versions > 1 ? 's' : ''}`;
+    if (S.libKind === 'creature') return (c.note ? noteTag(c.note) : '') + r + String(c.type || '').split(' et ').filter(Boolean).map(t => `<span class="nbs-chip">${esc(t)}</span>`).join('') || `${c.versions} version${c.versions > 1 ? 's' : ''}`;
     if (S.libKind === 'objet') return r + `<span class="nbs-chip">${esc(c.categorie)}</span>`;
     if (S.libKind === 'attaque') return r + `<span class="nbs-chip">${esc(c.element)}</span><span class="nbs-chip">${esc(GENRE[c.genre] || c.genre)}</span>`;
     return `<span class="nbs-chip">${Math.round(c.duree)} s</span>`;
+  }
+  const noteTag = n => `<span class="nbs-note n${n}" title="Note des mouvements (sur 5)">${n}/5</span>`;
+  let ctrlList = [], ctrlStamp = Date.now();
+  const REDRAWN = ['pattes', 'posture', 'tailles', 'couleurs'];  // ce que la carte graphique peut redessiner
+  const needsRedraw = c => c.problemes.some(p => REDRAWN.includes(p.code));
+  async function loadCtrl() {
+    $('#ctrl').innerHTML = '<div class="nbs-hint">Je regarde chaque créature…</div>';
+    try { ctrlList = await get('/control'); } catch (e) { $('#ctrl').textContent = e.message; return; }
+    renderCtrl();
+  }
+  function ctrlCard(c) {
+    return `<div class="nbs-card nbs-ctrl-card" data-s="${esc(c.slug)}">
+      <canvas width="64" height="64" class="nbs-ctrl-cv"></canvas>
+      <div class="nm">${esc(c.name)}</div><div class="meta">${noteTag(c.note)}</div>
+      <ul class="nbs-pb">${c.problemes.map(p => `<li class="g-${p.gravite}">${esc(p.texte)}</li>`).join('') || '<li class="g-ok">Rien à signaler.</li>'}</ul>
+      <div class="nbs-row nbs-ctrl-btns"><button class="nbs-btn dark sm" data-a="open">${ic('oeil')}Ouvrir</button>
+      <button class="nbs-btn dark sm" data-a="redo" title="Refaire la marche, les gestes d'attaque et les sprites (sans carte graphique)">${ic('refaire')}Refaire</button>
+      ${needsRedraw(c) ? `<button class="nbs-btn sm" data-a="redraw" title="Redessiner la vue ratée avec la carte graphique (gardée seulement si la note ne baisse pas)">${ic('refaire')}Redessiner</button>` : ''}</div></div>`;
+  }
+  function renderCtrl() {
+    const n = ctrlList.length, bad = ctrlList.filter(c => c.note <= 3).length;
+    $('#ctrlSum').textContent = n ? `${n} créatures · ${bad} à revoir (note 3 ou moins). Les moins bien notées d'abord.` : 'Aucune créature finie pour l\'instant.';
+    $('#ctrl').innerHTML = ctrlList.map(ctrlCard).join('');
+    const todo = ctrlList.filter(needsRedraw);
+    $('#ctrlRedraw').hidden = !todo.length;
+    $('#ctrlRedraw').lastChild.textContent = `Redessiner les vues ratées (${todo.length})`;
+    $$('#ctrl .nbs-ctrl-card').forEach(card => card.onclick = async e => {
+      const b = e.target.closest('[data-a]'); if (!b) return;
+      const slug = card.dataset.s;
+      if (b.dataset.a === 'open') { await open(slug); return show('dirs'); }
+      if (b.dataset.a === 'redraw') return runJob(() => post('/redraw', { slugs: [slug] }));
+      b.disabled = true; b.lastChild.textContent = 'Je refais…';
+      try {
+        const q = await post('/redo-motion', { slug }), c = ctrlList.find(x => x.slug === slug);
+        Object.assign(c, { note: q.note, problemes: q.problemes, mesures: q.mesures }); ctrlStamp = Date.now();
+        renderCtrl();
+      } catch (err) { b.disabled = false; b.lastChild.textContent = 'Refaire'; say(err.message, true); }
+    });
+  }
+  $('#ctrlRedraw').onclick = () => runJob(() => post('/redraw', {}));
+  function drawCtrl(tick) {  // le profil (ligne « gauche » de la planche) joué dans son ordre de marche
+    $$('#ctrl .nbs-ctrl-card').forEach(card => {
+      const c = ctrlList.find(x => x.slug === card.dataset.s); if (!c?.sheet) return;
+      const r = card.getBoundingClientRect(); if (r.bottom < 0 || r.top > innerHeight) return;  // hors de l'écran : rien à dessiner
+      const im = pic(`${U}lib/${encodeURIComponent(c.slug)}/${c.sheet}?v=${ctrlStamp}`); if (!im.complete) return;
+      const cyc = c.cycle || CYCLE, col = ['pas1', 'repos', 'pas2', 'mi1', 'mi2'].indexOf(cyc[tick % cyc.length]);
+      const g = card.querySelector('canvas').getContext('2d');
+      g.imageSmoothingEnabled = false; g.clearRect(0, 0, 64, 64); g.drawImage(im, col * 64, 64, 64, 64, 0, 0, 64, 64);
+    });
   }
   const EMPTY = { creature: 'Aucune créature pour l\'instant : invoque la première dans Créer.', objet: 'Aucun objet : crée le premier dans Créer › Objet.',
     attaque: 'Aucune attaque.', musique: 'Aucune musique : compose la première dans Créer › Musique.' };
@@ -1611,7 +1745,7 @@ export default async function (ctx) {
     $$('#wSaved [data-wx]').forEach(b => b.onclick = () => { l.splice(b.dataset.wx, 1); keepWorlds(l); wSavedList(); });
   }
   async function loadWorld() {
-    try { W8.lib = await get('/items?kind=creature'); } catch { W8.lib = []; }
+    try { W8.lib = await Promise.race([get('/items?kind=creature'), new Promise((_, no) => setTimeout(no, 4000))]); } catch { W8.lib = []; }  // un moteur muet ne bloque pas le monde
     if (!W8.world) wBuild(wOpts()); else wDraw();
     wSavedList();
   }

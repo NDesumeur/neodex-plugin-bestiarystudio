@@ -359,3 +359,16 @@
   .nbs-wside { width: auto; }
   .nbs-wmap { height: 420px; }
 }
+
+/* 1.10.0 : la note des mouvements, la page Contrôle, l'aperçu comme dans l'Arène */
+.nbs-note { display: inline-block; padding: 0 6px; margin-right: 4px; color: var(--white); box-shadow: 2px 2px 0 var(--ink0); font: 18px/1.4 "Grimoire", monospace; }
+.nbs-note.n1 { background: #a83232; } .nbs-note.n2 { background: #c0622c; } .nbs-note.n3 { background: #b08a1e; }
+.nbs-note.n4 { background: #4f8a3a; } .nbs-note.n5 { background: #2f7a5a; }
+.nbs-ctrl-cv { width: 128px; height: 128px; display: block; margin: 0 auto 4px; image-rendering: pixelated; }
+.nbs-pb { list-style: none; margin: 6px 0; padding: 0; text-align: left; font-size: 18px; line-height: 1.25; }
+.nbs-pb li { padding-left: 14px; position: relative; margin-bottom: 3px; }
+.nbs-pb li::before { content: ""; position: absolute; left: 0; top: 7px; width: 8px; height: 8px; background: var(--parch3); }
+.nbs-pb li.g-grave::before { background: #a83232; } .nbs-pb li.g-moyen::before { background: #c0622c; }
+.nbs-pb li.g-leger::before { background: #b08a1e; } .nbs-pb li.g-ok::before { background: #2f7a5a; }
+.nbs-ctrl-btns { justify-content: center; gap: 6px; }
+.nbs-stage-cv { width: 480px; max-width: 100%; height: auto; image-rendering: pixelated; cursor: pointer; }

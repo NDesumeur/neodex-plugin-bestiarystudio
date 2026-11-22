@@ -251,7 +251,28 @@ def main():
             done = [x for x in call(port, "/library")[1]]
             cs = [call(port, "/creature?slug=" + x["slug"])[1] for x in done]
             assert len(cs) == j["made"] and all(not c_["pending"] and c_["lore"] and len(c_["sprites"]) == 20 for c_ in cs), len(cs)
+            # la palette commune : prise sur une créature finie, imposée à une autre ; puis oubliée
+            pal = call(port, "/shared-palette", {"add": done[0]["slug"]})[1]
+            assert pal["refs"] == [done[0]["slug"]] and 2 <= len(pal["palette"]) <= 64, pal
+            c2 = call(port, "/lab", {"slug": done[1]["slug"], "opts": {"shared_palette": True}})[1]
+            assert c2["lab"]["shared_palette"] is True, c2["lab"]
+            from PIL import Image as _I
+            px = _I.open(Path(lib) / "creatures" / done[1]["slug"] / "sprites" / "bas_repos.png").convert("RGBA")
+            used = {"#%02x%02x%02x" % p[:3] for p in px.getdata() if p[3]}
+            assert used <= set(pal["palette"]) | {"#0b0b12"}, sorted(used - set(pal["palette"]))[:5]
+            assert call(port, "/shared-palette", {"clear": True})[1]["palette"] == []
             for x in done:
+                call(port, "/delete", {"slug": x["slug"]})
+            # la file de nuit : deux créatures écrites à la main, faites dans l'ordre, puis la boucle s'arrête seule
+            assert call(port, "/auto", {"queue": True})[0] == 400, "file vide refusée"
+            call(port, "/night", {"text": "Ophidrache : un serpent à ailes" + chr(10) + "[feu] Braisou : un petit renard de braises"})
+            assert call(port, "/auto", {"queue": True})[0] == 200
+            j = wait_job(port)
+            assert j["kind"] == "auto" and j["made"] == 2 and not j["error"], j
+            assert call(port, "/night", {})[1]["lines"] == [], "la file devait se vider"
+            names = sorted(call(port, "/creature?slug=" + x["slug"])[1]["name"] for x in call(port, "/library")[1])
+            assert names == ["Braisou", "Ophidrache"], names
+            for x in call(port, "/library")[1]:
                 call(port, "/delete", {"slug": x["slug"]})
         if not real:  # contrôle automatique : l'esquisse à 1 tête est refaite, le profil avec pattes est refait
             _, r = call(port, "/create", {"name": "Trio", "description": "méduse à trois têtes qui flotte", "seed": 5})
@@ -287,6 +308,17 @@ def main():
             wait_job(port)
             assert call(port, "/creature?slug=" + rr["slug"])[1]["brief"]["posture"] == "rampe"
             call(port, "/delete", {"slug": rr["slug"]})
+            # le contrôle : une note par créature finie, et le bouton « Refaire » (sans GPU)
+            code, ctl = call(port, "/control")
+            assert code == 200 and any(x["slug"] == r["slug"] and 1 <= x["note"] <= 5 for x in ctl), ctl
+            code, rm = call(port, "/redo-motion", {"slug": r["slug"]})
+            assert code == 200 and 1 <= rm["note"] <= 5, rm
+            assert call(port, "/creature?slug=" + r["slug"])[1]["cycle"], "cycle de marche"
+            # « Redessiner » (carte graphique) : une tâche qui finit, et la créature garde une note
+            code, rd = call(port, "/redraw", {"slugs": [r["slug"]]})
+            assert code == 200 and rd["job"], rd
+            wait_job(port)
+            assert call(port, "/creature?slug=" + r["slug"])[1]["views"]["gauche"]["versions"] >= 1, "profil"
             for s_ in (r["slug"], r2["slug"], fu["slug"]):
                 call(port, "/delete", {"slug": s_})
         print("OK : toutes les routes répondent", "(moteur réel)" if real else "(moteur factice)")

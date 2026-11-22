@@ -57,9 +57,11 @@ class Library:
             except Exception:
                 return None
 
-    def save(self, rec):
+    def save(self, rec, touch=True):
+        """touch=False : une note de contrôle, pas une modification (la date de mise à jour ne bouge pas)."""
         with self.lock:
-            rec["updated"] = time.time()
+            if touch:
+                rec["updated"] = time.time()
             d = self.dir(rec["slug"])
             (d / "views").mkdir(parents=True, exist_ok=True)
             self._file(rec["slug"]).write_text(json.dumps(rec, indent=2, ensure_ascii=False), encoding="utf-8")
